@@ -15,6 +15,10 @@ from lmfit import CompositeModel
 from lmfit.models import GaussianModel # Ensure CompositeModel is imported
 from scipy.stats import chi2
 
+from skimage import feature
+from sklearn.preprocessing import Binarizer
+from skimage.morphology import skeletonize
+
 import os
 from os.path import join
 
@@ -233,6 +237,7 @@ class FLStarkMapProcessor():
             return final_peak_indices
 
 
+
     def _calibrate_axis(self):
         """Calculates the time-to-frequency conversion factor from EIT peaks.
 
@@ -292,6 +297,7 @@ class FLStarkMapProcessor():
                                  }
 
         return out_calibrations_dict
+
 
     def plot_calibration_probing(self):
         """
@@ -738,10 +744,17 @@ class FLStarkMapProcessor():
 
         return gmodel
     
+    def _nearest_index(self, 
+                 f:float, 
+                 arr: np.ndarray
+                 ):
+        return np.array(np.abs(arr-f)).argmin()
+    
     def test_gmodels(self,
                      spectrum_trace: np.ndarray = [],
                      peaks_numbers: list = [1,2],
-                     significance: float = 0.05
+                     significance: float = 0.05,
+                     init_positions: np.ndarray = []
                      ):
         '''
         NEEDS REFACTORING
@@ -756,7 +769,7 @@ class FLStarkMapProcessor():
         chi2_scores = []
         for n, gmodel in zip(peaks_numbers, tested_gmodels):
             # Find peaks
-            pidx, pprop= find_peaks(y, height=0.05, distance=2, prominence=0.4, width=[2, 40])
+            pidx, pprop= find_peaks(y, height=0.07, distance=2, prominence=0.3, width=[1, 30])
             pmax =[]
             if len(pidx) >= n:
                 s = y[pidx].argsort()
@@ -765,10 +778,24 @@ class FLStarkMapProcessor():
                 print(f'Hoped for {n} peaks but found {len(pidx)}')
             
             params = lmfit.Parameters()
-            for i in range(n):
-                params.add(f'g{i}_center', value=x[pmax[i]])
-                params.add(f'g{i}_amplitude', value=30, min=1)
-                params.add(f'g{i}_sigma', value=10, max=30)
+            if len(init_positions)>0:
+                for i in range(n):
+                    params.add(f'g{i}_center', value=init_positions[i], min = init_positions[i]-40,  max = init_positions[i]+40)
+                    params.add(f'g{i}_amplitude', value=30, min=0.1)
+                    params.add(f'g{i}_sigma', value=7.6, min=5, max=10)
+                    # params.add(f'g{i}_center', value=x[pmax[i]], min = x[pmax[i]]-50,  max = x[pmax[i]]+50)
+                    # params.add(f'g{i}_amplitude', value=30, min=0.1)
+                    # params.add(f'g{i}_sigma', value=7.6, min=1, max=11)
+            else:
+                # for i in range(n):
+                #     params.add(f'g{i}_center', value=x[pmax[i]])
+                #     params.add(f'g{i}_amplitude', value=30, min=0.1)
+                #     params.add(f'g{i}_sigma', value=7.6, min=5, max=10)
+                for i in range(n):
+                    params.add(f'g{i}_center', value=x[pmax[i]])
+                    params.add(f'g{i}_amplitude', value=30)
+                    params.add(f'g{i}_sigma', value=7.6, min=1, max=11)
+
             
             fit_result = gmodel.fit(y,params,x=x)
             gresults.append(fit_result)
@@ -783,17 +810,19 @@ class FLStarkMapProcessor():
             
             
             dof = len(x) - 3*n
-            chi2_score = chi2.cdf(chi2_out*13, df=dof)
+            chi2_score = chi2.cdf(chi2_out*10, df=dof)
             chi2_scores.append(chi2_score)
             print(f'Chi squared for model {n} is: score {chi2_score}; statistic {chi2_out}')
-            if chi2_score < 1-significance:
+            if chi2_score > 1-significance:
+                pass
                 # for gr in gresults:
-                    # plt.figure()
-                    # gr.plot_fit()
-                    # dely = gr.eval_uncertainty(sigma=3)   
-                    # plt.plot(x,gr.init_fit,'--', label='Initi guess')
-                    # plt.plot(x[pmax], y[pmax], 'o', color='red')
-                    # plt.fill_between(x, gr.best_fit-dely, gr.best_fit+dely, color="#ABABAB", label=r'3-$\sigma$ uncertainty band')
+                #     plt.figure()
+                #     gr.plot_fit()
+                #     dely = gr.eval_uncertainty(sigma=3)   
+                #     plt.plot(x,gr.init_fit,'--', label='Initi guess')
+                #     plt.plot(x[pmax], y[pmax], 'o', color='red')
+                #     plt.fill_between(x, gr.best_fit-dely, gr.best_fit+dely, color="#ABABAB", label=r'3-$\sigma$ uncertainty band')
+            else:
                 return fit_result
             
     def test_custom_models(self,
@@ -818,6 +847,28 @@ class FLStarkMapProcessor():
         self.fitted_models = fitted_models
         return None
     
+    def fit_stark_map_enhanced(self,
+                      peaks_numbers: np.ndarray = [1,2]
+                      ):
+        '''
+        NEEDS REFACTORING
+        '''
+        #x = self.spectral_axis_mhz_bin
+        image = self.image_corrected          
+
+        fitted_models = []
+        next_init = []
+        for i,y in enumerate(image):
+            print(f'Row {i}')
+            fit, pidx = self.test_gmodels(y, peaks_numbers=peaks_numbers, init_positions=next_init)
+            if not(fit is None):
+                for i in range(peaks_numbers[0]):
+                        next_init.append(fit.params[f'g{i}_center'].value)
+            fitted_models.append(fit)
+        self.fitted_models = fitted_models
+        return None
+
+    
     def plot_gmodel_results(self,
                          transitions_str: str = []
                          ):
@@ -830,7 +881,7 @@ class FLStarkMapProcessor():
         fitted_models = np.array(self.fitted_models)
         none_mask = np.array([f is None for f in fitted_models])
 
-        m = ['o', 'v', 's', '^']
+        m = ['o', 'v', 's', '^', '*']
 
         fig1, ax1 = plt.subplots(3,1, sharex=True, figsize=(4,7))
         marker_size = 3
@@ -839,6 +890,7 @@ class FLStarkMapProcessor():
             pos_err = np.array([r.params[f'g{i}_center'].stderr for r in fitted_models[~none_mask]], dtype=float)
             ax1[0].errorbar(x=x[~none_mask], y=peaks_pos, yerr=pos_err, markersize=marker_size)
             ax1[0].set_ylabel('Blue Detuning (MHz)')
+            ax1[0].set_ylim((-400,200))
 
             
             heights = np.array([r.params[f'g{i}_amplitude'].value for r in fitted_models[~none_mask]], dtype=float)
@@ -890,7 +942,6 @@ class FLStarkMapProcessor():
         # fig2.supxlabel('Distance (mm)', fontsize=14)
         # fig2.supylabel('Blue detuning (MHz)', fontsize=14)
         # fig2.suptitle('Peak positions', fontsize=18)
-
      
     def plot_image_slice(self, 
                          distance = 0 # (mm) distance along the beam
@@ -1005,14 +1056,15 @@ def read_files(dirpath_str: str,
 #%%
 if __name__ == "__main__":
     ommit_files = [1,2,3,4,5,6,7,10,16,18,19,20,23,28,30,48]
-    fl_data, fl_files = read_files('./processed/', key='spec', files_idx_ommit=ommit_files)
-    ref_data, ref_files = read_files('./processed/', key='sync', files_idx_ommit=ommit_files)
+    dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-06-26\\processed'
+    fl_data, fl_files = read_files(dirpath, key='spec', files_idx_ommit=ommit_files)
+    ref_data, ref_files = read_files(dirpath, key='sync', files_idx_ommit=ommit_files)
 
 #%%
     fps = 12.8 # Hz
     sweep = 0.05 # Hz
     fov = 10.8 # mm
-    image_number = 6
+    image_number = 18
     img = np.copy(fl_data[image_number])
     ref = np.copy(ref_data[image_number]).T
     print(ref.shape)
@@ -1032,9 +1084,9 @@ if __name__ == "__main__":
     fig = fsm.plot_stark_map(False)
     fig = fsm.plot_corrected_stark_map()
 # %%
-    fsm.plot_image_slice(6)
+    fsm.plot_image_slice(2.5)
 # %%
-    fsm.fit_stark_map([4])
+    fsm.fit_stark_map([2])
 
 #%%
     plot_labels = '$44D_{5/2}$: $|m_J|=5/2$,$44D_{5/2}$: $|m_J|=1/2$,$44D_{5/2}$: $|m_J|=3/2$,$44D_{3/2}$: $|m_J|=1/2$,$44D_{3/2}$: $|m_J|=1/2$'
