@@ -1003,6 +1003,20 @@ class FLStarkMapProcessor():
         outlier_mask = z_scores > threshold
         return outlier_mask, z_scores
 
+    def get_raw_image(self):
+        return self.raw_image
+
+    def get_binned_image(self):
+        return self.image_binned
+    
+    def get_corrected_image(self):
+        return self.image_corrected
+    
+    def get_xcoord(self, binned=True):
+        return self.x_axis_mm_bin
+    
+    def get_ycoord(self):
+        return self.spectral_axis_mhz
 
     
 def read_files(dirpath_str: str, 
@@ -1051,6 +1065,8 @@ def read_files(dirpath_str: str,
     else:
         print("Provided path does no exist! ", dirpath_str)
         return None
+    
+
 
 
 #%%
