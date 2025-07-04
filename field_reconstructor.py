@@ -748,8 +748,7 @@ class FLStarkMapProcessor():
     def test_gmodels(self,
                      spectrum_trace: np.ndarray = [],
                      peaks_numbers: list = [1,2],
-                     significance: float = 0.05,
-                     init_positions: np.ndarray = []
+                     significance: float = 0.05
                      ):
         '''
         NEEDS REFACTORING
@@ -762,63 +761,40 @@ class FLStarkMapProcessor():
 
         gresults = []
         chi2_scores = []
+        fit_out = None
         for n, gmodel in zip(peaks_numbers, tested_gmodels):
             # Find peaks
-            pidx, pprop= find_peaks(y, height=0.1, distance=5, prominence=0.5, width=[1, 20])
+            pidx, pprop= find_peaks(y, height=0.5, distance=1, prominence=0.4, width=[2, 20])
             pmax =[]
+            params = lmfit.Parameters()
             if len(pidx) >= n:
                 s = np.sort(y[pidx].argsort()[-n:])
                 pmax = np.flip(pidx[s])
-            else:
-                print(f'Hoped for {n} peaks but found {len(pidx)}')
-            
-            params = lmfit.Parameters()
-            if len(init_positions)>0:
-                for i in range(n):
-                    # params.add(f'g{i}_center', value=init_positions[i])
-                    # params.add(f'g{i}_amplitude', value=30, min=0.1)
-                    # params.add(f'g{i}_sigma', value=7.6)
-                    params.add(f'g{i}_center', value=x[pmax[i]], min = x[pmax[i]]-10,  max = x[pmax[i]]+10)
-                    params.add(f'g{i}_amplitude', value=30, min=0.1)
-                    params.add(f'g{i}_sigma', value=7.6)
-            else:
-                # for i in range(n):
-                #     params.add(f'g{i}_center', value=x[pmax[i]])
-                #     params.add(f'g{i}_amplitude', value=30, min=0.1)
-                #     params.add(f'g{i}_sigma', value=7.6, min=5, max=10)
                 for i in range(n):
                     params.add(f'g{i}_center', value=x[pmax[i]])
                     params.add(f'g{i}_amplitude', value=30, min=0.1)
-                    params.add(f'g{i}_sigma', value=7.6)
+                    params.add(f'g{i}_sigma', value=7.6, min=4, max=10)
+                
+                fit_result = gmodel.fit(y,params,x=x)
 
+                if fit_result.success:
+                    print(f"Model {n}: The fit converged successfully.")
+                else:
+                    print(f"Model {n}: The fit did not converge.")
+
+                chi2_out = fit_result.chisqr
             
-            fit_result = gmodel.fit(y,params,x=x)
-            gresults.append(fit_result)
-
-            if fit_result.success:
-                print(f"Model {n}: The fit converged successfully.")
+                dof = len(x) - 3*n
+                chi2_score = chi2.cdf(chi2_out*14, df=dof)
+                chi2_scores.append(chi2_score)
+                if chi2_score < 1-significance:
+                    fit_out = fit_result
+                    print(f'Chi squared for model {n} is: score {chi2_score}; statistic {chi2_out}')
             else:
-                print(f"Model {n}: The fit did not converge.")
-                continue
-
-            chi2_out = fit_result.chisqr
+                print(f'Hoped for {n} peaks but found {len(pidx)}')
+                break
             
-            
-            dof = len(x) - 3*n
-            chi2_score = chi2.cdf(chi2_out*15, df=dof)
-            chi2_scores.append(chi2_score)
-            print(f'Chi squared for model {n} is: score {chi2_score}; statistic {chi2_out}')
-            if chi2_score > 1-significance:
-                return None
-                # for gr in gresults:
-                #     plt.figure()
-                #     gr.plot_fit()
-                #     dely = gr.eval_uncertainty(sigma=3)   
-                #     plt.plot(x,gr.init_fit,'--', label='Initi guess')
-                #     plt.plot(x[pmax], y[pmax], 'o', color='red')
-                #     plt.fill_between(x, gr.best_fit-dely, gr.best_fit+dely, color="#ABABAB", label=r'3-$\sigma$ uncertainty band')
-            else:
-                return fit_result
+        return fit_out
             
     def test_custom_models(self,
                            models: np.ndarray[CompositeModel]
@@ -890,29 +866,39 @@ class FLStarkMapProcessor():
         error_array.fill(np.nan)
 
 
+        results_dict = {'centers': np.empty((n_peaks_max, n_models)),
+                        'amplitudes': np.empty((n_peaks_max, n_models)),
+                        'fwhm': np.empty((n_peaks_max, n_models)),
+                        'centers_err': np.empty((n_peaks_max, n_models)),
+                        'amplitudes_err': np.empty((n_peaks_max, n_models)),
+                        'fwhm_err': np.empty((n_peaks_max, n_models)),
+                        }
+
         fhwhm_coef = 2.3538
         for i in range(n_peaks_max):
             print('n_params:', n_params[i])
-            if i<int(n_params[i]/3)-1:
-                print(i)
-                results_array[i] = np.array([r.params[f'g{i}_center'].value for r in valid_models], dtype=float)
-                error_array[i] = np.array([r.params[f'g{i}_center'].stderr for r in valid_models], dtype=float)
-                results_array[2*i] = np.array([r.params[f'g{i}_amplitude'].value for r in valid_models], dtype=float)
-                error_array[2*i] = np.array([r.params[f'g{i}_amplitude'].stderr for r in valid_models], dtype=float)
-                results_array[3*i] = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].value for r in valid_models], dtype=float)
-                error_array[3*i] = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].stderr for r in valid_models], dtype=float)
+            if i<int(n_params[i]/3):
+                results_dict['centers'][i] = np.array([r.params[f'g{i}_center'].value for r in valid_models], dtype=float)
+                results_dict['amplitudes'][i] = np.array([r.params[f'g{i}_amplitude'].value for r in valid_models], dtype=float)
+                results_dict['fwhm'][i] = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].value for r in valid_models], dtype=float)
+                results_dict['centers_err'][i] = np.array([r.params[f'g{i}_center'].stderr for r in valid_models], dtype=float)
+                results_dict['amplitudes_err'][i] = np.array([r.params[f'g{i}_amplitude'].stderr for r in valid_models], dtype=float)
+                results_dict['fwhm_err'][i] = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].stderr for r in valid_models], dtype=float)
             else: pass        
         m = ['o', 'v', 's', '^', '*']
 
         fig1, ax1 = plt.subplots(3,1, sharex=True, figsize=(4,7))
         marker_size = 3
         for i in range(n_peaks_max):
-            centers = results_array[i]; centers_error = error_array[i]
-            ax1[0].errorbar(x=x, y=centers, yerr=centers_error, markersize=marker_size)
+            centers = results_dict['centers'][i]
+            centers_error = results_dict['centers_err'][i]
+            ax1[0].errorbar(x=x, y=centers, yerr=centers_error, color=f'C{i}',linestyle='None')
+            ax1[0].plot(x,centers,marker=m[i],color=f'C{i}', markersize=marker_size,linestyle='None')
             ax1[0].set_ylabel('Blue Detuning (MHz)')
             ax1[0].set_ylim((-700,200))
 
-            amplitudes = results_array[2*i]; amplitudes_error = error_array[2*i]
+            amplitudes = results_dict['amplitudes'][i]
+            amplitudes_error = results_dict['amplitudes_err'][i]
             ax1[1].plot(x, amplitudes, marker=m[i], color=f'C{i}', alpha=0.5, markersize=marker_size, linestyle='None')
             ax1[1].errorbar(x,
                             amplitudes,
@@ -922,7 +908,8 @@ class FLStarkMapProcessor():
                             alpha = 0.4)
             ax1[1].set_ylabel('Amplitude (rel. units)')
 
-            fwhm = results_array[3*i]; fwhm_error = error_array[3*i]
+            fwhm = results_dict['fwhm'][i]
+            fwhm_error = results_dict['fwhm_err'][i]
             ax1[2].plot(x, fwhm, marker=m[i], color=f'C{i}', alpha = 0.3, markersize=marker_size, linestyle='None')
             ax1[2].errorbar(x = x,
                             y = fwhm,
@@ -932,62 +919,6 @@ class FLStarkMapProcessor():
                             alpha = 0.3)
             ax1[2].set_xlabel('Distance (mm)')
             ax1[2].set_ylabel('FWHM (MHz)')
-            # peaks_pos = np.array([r.params[f'g{i}_center'].value for r in fitted_models[~none_mask]], dtype=float)
-            # pos_err = np.array([r.params[f'g{i}_center'].stderr for r in fitted_models[~none_mask]], dtype=float)
-            # ax1[0].errorbar(x=x, y=peaks_pos, yerr=pos_err, markersize=marker_size)
-            # ax1[0].set_ylabel('Blue Detuning (MHz)')
-            # ax1[0].set_ylim((-700,200))
-
-            
-            # heights = np.array([r.params[f'g{i}_amplitude'].value for r in fitted_models[~none_mask]], dtype=float)
-            # heights_err = np.array([r.params[f'g{i}_amplitude'].stderr for r in fitted_models[~none_mask]], dtype=float)
-            # ax1[1].plot(x, heights, marker=m[i], color=f'C{i}', alpha=0.5, markersize=marker_size, linestyle='None')
-            # ax1[1].errorbar(x,
-            #                 heights,
-            #                 yerr=heights_err,
-            #                 linestyle='None',
-            #                 color=f'C{i}',
-            #                 alpha = 0.4)
-            # ax1[1].set_ylabel('Amplitude (rel. units)')
-
-            # fhwhm_coef = 2.3538
-            # w = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].value for r in fitted_models[~none_mask]], dtype=float)
-            # w_err = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].stderr for r in fitted_models[~none_mask]], dtype=float)
-            # ax1[2].plot(x, w, marker=m[i], color=f'C{i}', alpha = 0.3, markersize=marker_size, linestyle='None')
-            # ax1[2].errorbar(x = x,
-            #                 y = w,
-            #                 yerr = w_err,
-            #                 linestyle='None',
-            #                 color=f'C{i}',
-            #                 alpha = 0.3)
-            # ax1[2].set_xlabel('Distance (mm)')
-            # ax1[2].set_ylabel('FWHM (MHz)')
-
-
-        # fig2, ax2 = plt.subplots(2,2, sharex=True)
-        # axs2 = ax2.flatten()
-        # for i in range(4):
-        #     peaks_pos = np.array([r.params[f'g{i+1}_center'].value for r in fitted_models], dtype=float)
-        #     pos_err = np.array([r.params[f'g{i+1}_center'].stderr for r in fitted_models], dtype=float)
-
-        #     db_mask, _ = _detect_outliers_zscore(peaks_pos, threshold=1.7)
-
-        #     axs2[i].plot(X[~db_mask],
-        #                 peaks_pos[~db_mask],
-        #                 marker='.',
-        #                 alpha = 0.5,
-        #                 color = f'C{i}'
-        #                 )
-        #     axs2[i].errorbar(x = x[~db_mask],
-        #                     y = peaks_pos[~db_mask],
-        #                     yerr = pos_err[~db_mask],
-        #                     color = f'C{i}',
-        #                     linestyle='None',
-        #                     alpha = 0.3)
-        #     axs2[i].set_title(transitions_labels[i])
-        # fig2.supxlabel('Distance (mm)', fontsize=14)
-        # fig2.supylabel('Blue detuning (MHz)', fontsize=14)
-        # fig2.suptitle('Peak positions', fontsize=18)
      
     def plot_image_slice(self, 
                          distance = 0 # (mm) distance along the beam
@@ -1133,7 +1064,7 @@ if __name__ == "__main__":
     fps = 12.8 # Hz
     sweep = 0.05 # Hz
     fov = 10.8 # mm
-    image_number = 18
+    image_number = 78
     img = np.copy(fl_data[image_number])
     ref = np.copy(ref_data[image_number]).T
     print(ref.shape)
@@ -1153,11 +1084,12 @@ if __name__ == "__main__":
     fig = fsm.plot_stark_map(False)
     fig = fsm.plot_corrected_stark_map()
 # %%
-    fsm.plot_image_slice(2.5)
+    fsm.plot_image_slice(2)
 # %%
-    fsm.fit_stark_map([3,4])
+    fsm.fit_stark_map([3,4,5])
 
 #%%
-    plot_labels = '$44D_{5/2}$: $|m_J|=5/2$,$44D_{5/2}$: $|m_J|=1/2$,$44D_{5/2}$: $|m_J|=3/2$,$44D_{3/2}$: $|m_J|=1/2$,$44D_{3/2}$: $|m_J|=1/2$'
+    #plot_labels = '$44D_{5/2}$: $|m_J|=5/2$,$44D_{5/2}$: $|m_J|=1/2$,$44D_{5/2}$: $|m_J|=3/2$,$44D_{3/2}$: $|m_J|=1/2$,$44D_{3/2}$: $|m_J|=1/2$'
+    plot_labels = str([])
     fsm.plot_gmodel_results(plot_labels)
 # %%
