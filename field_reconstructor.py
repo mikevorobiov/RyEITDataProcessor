@@ -174,7 +174,7 @@ class FLStarkMapProcessor():
                        number_of_peaks: int = 2,
                        min_peak_width: int = 10,
                        max_peak_width: int = 300,
-                       min_peak_distance: int = 15,
+                       min_peak_distance: int = 100,
                        return_peak_properties: bool = False
                        ) -> np.ndarray:
         """
@@ -511,7 +511,6 @@ class FLStarkMapProcessor():
             #     bin_size
             # ).mean(axis=2)
 
-            # Your original approach, rephrased slightly for clarity:
             binned_rows = []
             for row_data in self.raw_image.T: # Iterate through each row along spatial axis
                 # Reshape each row to create blocks of 'bin_size' and take the mean
@@ -695,11 +694,7 @@ class FLStarkMapProcessor():
         ax.set_title(current_title)
 
         # --- 3. Plotting with pcolormesh ---
-        # Note on pcolormesh: x and y should typically be the coordinates of the *edges*
-        # of the cells. If your x_coords and y_coords are centers, pcolormesh might
-        # implicitly handle it, or you might need to adjust them (e.g., using np.meshgrid)
-        # or use imshow. Assuming they work correctly as is for your data structure.
-        mesh = ax.pcolormesh(x_coords, y_coords, plot_data.T, cmap=cmap) # .T is common if image is (spatial, spectral)
+        mesh = ax.pcolormesh(x_coords, y_coords, plot_data.T, cmap=cmap)
 
         # --- 4. Colorbar and Labels ---
         plt.colorbar(mesh, ax=ax, label=cbar_label)
@@ -769,23 +764,23 @@ class FLStarkMapProcessor():
         chi2_scores = []
         for n, gmodel in zip(peaks_numbers, tested_gmodels):
             # Find peaks
-            pidx, pprop= find_peaks(y, height=0.07, distance=2, prominence=0.3, width=[1, 30])
+            pidx, pprop= find_peaks(y, height=0.1, distance=5, prominence=0.5, width=[1, 20])
             pmax =[]
             if len(pidx) >= n:
-                s = y[pidx].argsort()
-                pmax = np.flip(pidx[s][-n:])
+                s = np.sort(y[pidx].argsort()[-n:])
+                pmax = np.flip(pidx[s])
             else:
                 print(f'Hoped for {n} peaks but found {len(pidx)}')
             
             params = lmfit.Parameters()
             if len(init_positions)>0:
                 for i in range(n):
-                    params.add(f'g{i}_center', value=init_positions[i], min = init_positions[i]-40,  max = init_positions[i]+40)
-                    params.add(f'g{i}_amplitude', value=30, min=0.1)
-                    params.add(f'g{i}_sigma', value=7.6, min=5, max=10)
-                    # params.add(f'g{i}_center', value=x[pmax[i]], min = x[pmax[i]]-50,  max = x[pmax[i]]+50)
+                    # params.add(f'g{i}_center', value=init_positions[i])
                     # params.add(f'g{i}_amplitude', value=30, min=0.1)
-                    # params.add(f'g{i}_sigma', value=7.6, min=1, max=11)
+                    # params.add(f'g{i}_sigma', value=7.6)
+                    params.add(f'g{i}_center', value=x[pmax[i]], min = x[pmax[i]]-10,  max = x[pmax[i]]+10)
+                    params.add(f'g{i}_amplitude', value=30, min=0.1)
+                    params.add(f'g{i}_sigma', value=7.6)
             else:
                 # for i in range(n):
                 #     params.add(f'g{i}_center', value=x[pmax[i]])
@@ -793,8 +788,8 @@ class FLStarkMapProcessor():
                 #     params.add(f'g{i}_sigma', value=7.6, min=5, max=10)
                 for i in range(n):
                     params.add(f'g{i}_center', value=x[pmax[i]])
-                    params.add(f'g{i}_amplitude', value=30)
-                    params.add(f'g{i}_sigma', value=7.6, min=1, max=11)
+                    params.add(f'g{i}_amplitude', value=30, min=0.1)
+                    params.add(f'g{i}_sigma', value=7.6)
 
             
             fit_result = gmodel.fit(y,params,x=x)
@@ -810,11 +805,11 @@ class FLStarkMapProcessor():
             
             
             dof = len(x) - 3*n
-            chi2_score = chi2.cdf(chi2_out*10, df=dof)
+            chi2_score = chi2.cdf(chi2_out*15, df=dof)
             chi2_scores.append(chi2_score)
             print(f'Chi squared for model {n} is: score {chi2_score}; statistic {chi2_out}')
             if chi2_score > 1-significance:
-                pass
+                return None
                 # for gr in gresults:
                 #     plt.figure()
                 #     gr.plot_fit()
@@ -876,46 +871,97 @@ class FLStarkMapProcessor():
         NEEDS REFACTORING
         '''
         transitions_labels = transitions_str.split(sep=',')
-        x = self.x_axis_mm_bin
-
+        
         fitted_models = np.array(self.fitted_models)
-        none_mask = np.array([f is None for f in fitted_models])
 
+
+        none_mask = np.array([f is None for f in fitted_models])
+        valid_models = fitted_models[~none_mask]
+        x = self.x_axis_mm_bin[~none_mask]
+
+        n_models = len(valid_models)
+        n_params = [len(fm.params) for fm in valid_models]
+        n_params_max = np.max(n_params)
+        n_peaks_max = int(n_params_max/3)
+
+        results_array = np.empty((n_params_max, n_models))
+        error_array = np.empty((n_params_max, n_models))
+        results_array.fill(np.nan)
+        error_array.fill(np.nan)
+
+
+        fhwhm_coef = 2.3538
+        for i in range(n_peaks_max):
+            print('n_params:', n_params[i])
+            if i<int(n_params[i]/3)-1:
+                print(i)
+                results_array[i] = np.array([r.params[f'g{i}_center'].value for r in valid_models], dtype=float)
+                error_array[i] = np.array([r.params[f'g{i}_center'].stderr for r in valid_models], dtype=float)
+                results_array[2*i] = np.array([r.params[f'g{i}_amplitude'].value for r in valid_models], dtype=float)
+                error_array[2*i] = np.array([r.params[f'g{i}_amplitude'].stderr for r in valid_models], dtype=float)
+                results_array[3*i] = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].value for r in valid_models], dtype=float)
+                error_array[3*i] = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].stderr for r in valid_models], dtype=float)
+            else: pass        
         m = ['o', 'v', 's', '^', '*']
 
         fig1, ax1 = plt.subplots(3,1, sharex=True, figsize=(4,7))
         marker_size = 3
-        for i in range(4):
-            peaks_pos = np.array([r.params[f'g{i}_center'].value for r in fitted_models[~none_mask]], dtype=float)
-            pos_err = np.array([r.params[f'g{i}_center'].stderr for r in fitted_models[~none_mask]], dtype=float)
-            ax1[0].errorbar(x=x[~none_mask], y=peaks_pos, yerr=pos_err, markersize=marker_size)
+        for i in range(n_peaks_max):
+            centers = results_array[i]; centers_error = error_array[i]
+            ax1[0].errorbar(x=x, y=centers, yerr=centers_error, markersize=marker_size)
             ax1[0].set_ylabel('Blue Detuning (MHz)')
-            ax1[0].set_ylim((-400,200))
+            ax1[0].set_ylim((-700,200))
 
-            
-            heights = np.array([r.params[f'g{i}_amplitude'].value for r in fitted_models[~none_mask]], dtype=float)
-            heights_err = np.array([r.params[f'g{i}_amplitude'].stderr for r in fitted_models[~none_mask]], dtype=float)
-            ax1[1].plot(x[~none_mask], heights, marker=m[i], color=f'C{i}', alpha=0.5, markersize=marker_size, linestyle='None')
-            ax1[1].errorbar(x[~none_mask],
-                            heights,
-                            yerr=heights_err,
+            amplitudes = results_array[2*i]; amplitudes_error = error_array[2*i]
+            ax1[1].plot(x, amplitudes, marker=m[i], color=f'C{i}', alpha=0.5, markersize=marker_size, linestyle='None')
+            ax1[1].errorbar(x,
+                            amplitudes,
+                            yerr=amplitudes_error,
                             linestyle='None',
                             color=f'C{i}',
                             alpha = 0.4)
             ax1[1].set_ylabel('Amplitude (rel. units)')
 
-            fhwhm_coef = 2.3538
-            w = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].value for r in fitted_models[~none_mask]], dtype=float)
-            w_err = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].stderr for r in fitted_models[~none_mask]], dtype=float)
-            ax1[2].plot(x[~none_mask], w, marker=m[i], color=f'C{i}', alpha = 0.3, markersize=marker_size, linestyle='None')
-            ax1[2].errorbar(x = x[~none_mask],
-                            y = w,
-                            yerr = w_err,
+            fwhm = results_array[3*i]; fwhm_error = error_array[3*i]
+            ax1[2].plot(x, fwhm, marker=m[i], color=f'C{i}', alpha = 0.3, markersize=marker_size, linestyle='None')
+            ax1[2].errorbar(x = x,
+                            y = fwhm,
+                            yerr = fwhm_error,
                             linestyle='None',
                             color=f'C{i}',
                             alpha = 0.3)
             ax1[2].set_xlabel('Distance (mm)')
             ax1[2].set_ylabel('FWHM (MHz)')
+            # peaks_pos = np.array([r.params[f'g{i}_center'].value for r in fitted_models[~none_mask]], dtype=float)
+            # pos_err = np.array([r.params[f'g{i}_center'].stderr for r in fitted_models[~none_mask]], dtype=float)
+            # ax1[0].errorbar(x=x, y=peaks_pos, yerr=pos_err, markersize=marker_size)
+            # ax1[0].set_ylabel('Blue Detuning (MHz)')
+            # ax1[0].set_ylim((-700,200))
+
+            
+            # heights = np.array([r.params[f'g{i}_amplitude'].value for r in fitted_models[~none_mask]], dtype=float)
+            # heights_err = np.array([r.params[f'g{i}_amplitude'].stderr for r in fitted_models[~none_mask]], dtype=float)
+            # ax1[1].plot(x, heights, marker=m[i], color=f'C{i}', alpha=0.5, markersize=marker_size, linestyle='None')
+            # ax1[1].errorbar(x,
+            #                 heights,
+            #                 yerr=heights_err,
+            #                 linestyle='None',
+            #                 color=f'C{i}',
+            #                 alpha = 0.4)
+            # ax1[1].set_ylabel('Amplitude (rel. units)')
+
+            # fhwhm_coef = 2.3538
+            # w = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].value for r in fitted_models[~none_mask]], dtype=float)
+            # w_err = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].stderr for r in fitted_models[~none_mask]], dtype=float)
+            # ax1[2].plot(x, w, marker=m[i], color=f'C{i}', alpha = 0.3, markersize=marker_size, linestyle='None')
+            # ax1[2].errorbar(x = x,
+            #                 y = w,
+            #                 yerr = w_err,
+            #                 linestyle='None',
+            #                 color=f'C{i}',
+            #                 alpha = 0.3)
+            # ax1[2].set_xlabel('Distance (mm)')
+            # ax1[2].set_ylabel('FWHM (MHz)')
 
 
         # fig2, ax2 = plt.subplots(2,2, sharex=True)
@@ -1071,10 +1117,17 @@ def read_files(dirpath_str: str,
 
 #%%
 if __name__ == "__main__":
-    ommit_files = [1,2,3,4,5,6,7,10,16,18,19,20,23,28,30,48]
-    dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-06-26\\processed'
+    #ommit_files = [1,2,3,4,5,6,7,10,16,18,19,20,23,28,30,48]
+    ommit_files = []
+
+    # dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-06-26\\processed'
+    dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-07-01\\processed'
+
     fl_data, fl_files = read_files(dirpath, key='spec', files_idx_ommit=ommit_files)
     ref_data, ref_files = read_files(dirpath, key='sync', files_idx_ommit=ommit_files)
+
+
+    
 
 #%%
     fps = 12.8 # Hz
@@ -1102,7 +1155,7 @@ if __name__ == "__main__":
 # %%
     fsm.plot_image_slice(2.5)
 # %%
-    fsm.fit_stark_map([2])
+    fsm.fit_stark_map([3,4])
 
 #%%
     plot_labels = '$44D_{5/2}$: $|m_J|=5/2$,$44D_{5/2}$: $|m_J|=1/2$,$44D_{5/2}$: $|m_J|=3/2$,$44D_{3/2}$: $|m_J|=1/2$,$44D_{3/2}$: $|m_J|=1/2$'
