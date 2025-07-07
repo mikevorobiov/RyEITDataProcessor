@@ -11,9 +11,10 @@ import matplotlib.pyplot as plt
 
 from scipy.signal import find_peaks
 import lmfit
-from lmfit import CompositeModel
-from lmfit.models import GaussianModel # Ensure CompositeModel is imported
+from lmfit import CompositeModel # Ensure CompositeModel is imported
+from lmfit.models import GaussianModel, ConstantModel
 from scipy.stats import chi2
+from scipy.linalg import cholesky
 
 from skimage import feature
 from sklearn.preprocessing import Binarizer
@@ -72,6 +73,7 @@ class FLStarkMapProcessor():
         # Store raw image shape (useful for debugging/validation)
         self.image_shape_raw = image.shape
 
+        self.covariance_matrix = np.array([])
         self.fitted_models = []
 
         # --- Perform initial calibration and axis generation ---
@@ -94,9 +96,9 @@ class FLStarkMapProcessor():
                 self.image_binned = self._bin_raw_image()
                 self.x_axis_mm_bin = np.linspace(0, self.fov, self.image_binned.shape[0])
                 self.spectral_axis_mhz_bin = (main_peak -
-                                              np.linspace(0, half_period_sec, self.image_binned.shape[1])
+                                              np.linspace(0, half_period_sec, self.raw_image.shape[1])
                                               ) * sec_to_mhz
-                self.image_corrected = self._baseline_image()
+                self.image_corrected = self._baseline_image(self.image_binned)
             else:
                 self.image_binned = None
                 print('Note: Binned image has not been initialized!')
@@ -172,7 +174,7 @@ class FLStarkMapProcessor():
     def _find_eit_peaks(self,
                        signal: np.ndarray,
                        number_of_peaks: int = 2,
-                       min_peak_width: int = 10,
+                       min_peak_width: int = 20,
                        max_peak_width: int = 300,
                        min_peak_distance: int = 100,
                        return_peak_properties: bool = False
@@ -454,6 +456,15 @@ class FLStarkMapProcessor():
             print('Error: Couldn\'t generate binned image!')
 
         return image_bin
+    
+    def _bin_med_raw_image_probing(self):
+        try:
+            image_bin = np.array([np.media(c.reshape(-1, 2**self.bin_power),axis=1) for c in self.raw_image.T])
+        except ValueError:
+            print('Error: Couldn\'t generate binned image!')
+
+        return image_bin
+
 
     def _bin_raw_image(self) -> np.ndarray:
         """
@@ -733,10 +744,9 @@ class FLStarkMapProcessor():
 
         prefixes = [f'g{i}_' for i in range(gaussians_number)]
 
-        gmodel = GaussianModel(prefix=prefixes[0])
-        for i in range(1, len(prefixes)):
-            gmodel = gmodel + GaussianModel(prefix=prefixes[i])
-
+        gmodel =ConstantModel(prefix='c_')
+        for p in prefixes:
+            gmodel += GaussianModel(prefix=p)
         return gmodel
     
     def _nearest_index(self, 
@@ -745,180 +755,522 @@ class FLStarkMapProcessor():
                  ):
         return np.array(np.abs(arr-f)).argmin()
     
+    def _background_covariance(self, image):
+        im = self._baseline_image(image)
+        nx, ny = im.shape
+        pairwise_matrix = np.zeros((ny, ny))
+        for r in im:
+            dr = r - r.mean()
+            pairwise_matrix += np.outer(dr, dr)
+        
+        covariance = pairwise_matrix/(nx)
+        #covariance = np.identity(ny)
+        #print(covariance.shape)
+        return covariance
+    
+    def set_background_covariance(self,
+                                  image):
+        self.covariance_matrix = self._background_covariance(image)
+        return None
+    
+    def plot_covariance(self):
+        x = self.spectral_axis_mhz
+        fig, ax = plt.subplots()
+        ax.pcolormesh(x, x, self.covariance_matrix, cmap='jet')
+        ax.set_aspect(1)
+        ax.set_title('Background covariance')
+        ax.set_xlabel('Blue detuning (MHz)')
+        return fig, ax
+    
+    def _initialize_peak_parameters(self, x: np.ndarray, y: np.ndarray, num_peaks: int,
+                                    peak_height: float, peak_distance: float,
+                                    peak_prominence: float, peak_width: list):
+        """
+        Finds initial peak parameters for the Gaussian model using user-defined scipy.signal.find_peaks parameters.
+
+        Args:
+            x (np.ndarray): The x-axis data (spectral axis).
+            y (np.ndarray): The y-axis data (spectrum trace).
+            num_peaks (int): The number of peaks expected for the current model.
+            peak_height (float): Required height of peaks.
+            peak_distance (float): Required minimal horizontal distance (in samples) between neighboring peaks.
+            peak_prominence (float): Required prominence of peaks.
+            peak_width (list): Required width of peaks in samples as `[min_width, max_width]`.
+
+        Returns:
+            lmfit.Parameters: lmfit.Parameters object with initial values, or None if not enough peaks found.
+        """
+        params = lmfit.Parameters()
+        params.add('c_c', value=0.0) # Add constant offset parameter
+
+        # Find initial peak candidates using exposed parameters
+        peak_indices, _ = find_peaks(y, height=peak_height, distance=peak_distance,
+                                     prominence=peak_prominence, width=peak_width)
+
+        if len(peak_indices) < num_peaks:
+            # print(f'Warning: Hopes for {num_peaks} peaks but found only {len(peak_indices)}. Cannot initialize model.')
+            return None
+
+        # Select the 'num_peaks' strongest peaks
+        sorted_peak_indices = peak_indices[np.argsort(y[peak_indices])][-num_peaks:]
+        sorted_peak_indices.sort() # Sort by x-value for consistent parameter naming
+
+        # Initialize parameters for each Gaussian component
+        for i, p_idx in enumerate(sorted_peak_indices):
+            params.add(f'g{i}_center', value=x[p_idx], min=x[p_idx]-10, max=x[p_idx]+10)
+            params.add(f'g{i}_amplitude', value=y[p_idx], min=0.01)
+            params.add(f'g{i}_sigma', value=7.6, min=1, max=20)
+
+        return params
+
     def test_gmodels(self,
-                     spectrum_trace: np.ndarray = [],
-                     peaks_numbers: list = [1,2],
-                     significance: float = 0.05
-                     ):
-        '''
-        NEEDS REFACTORING
-        '''
-        tested_gmodels = [self._generate_gmodel(p) for p in peaks_numbers]
+                     spectrum_trace: np.ndarray,
+                     peaks_numbers: list = [1, 2],
+                     significance: float = 0.05,
+                     peak_height: float = 0.5,
+                     peak_distance: float = 1,
+                     peak_prominence: float = 0.7,
+                     peak_width: list = [2, 20],
+                     verbose: bool = False # Added verbose flag
+                     ) -> lmfit.model.ModelResult | None:
+        """
+        Evaluates different Gaussian models based on the number of peaks and
+        returns the best fit result based on a chi-squared significance test.
+
+        Args:
+            spectrum_trace (np.ndarray): The 1D array of spectral intensity data.
+            peaks_numbers (list): A list of integers, each representing a number of
+                                   Gaussian peaks to test in the model.
+            significance (float): The significance level for the chi-squared test.
+            peak_height (float): Passed to scipy.signal.find_peaks. Required height of peaks.
+            peak_distance (float): Passed to scipy.signal.find_peaks. Required minimal horizontal distance (in samples) between neighboring peaks.
+            peak_prominence (float): Passed to scipy.signal.find_peaks. Required prominence of peaks.
+            peak_width (list): Passed to scipy.signal.find_peaks. Required width of peaks in samples as `[min_width, max_width]`.
+            verbose (bool): If True, prints detailed fit information during the process.
+
+        Returns:
+            lmfit.model.ModelResult: The lmfit result object for the best-fitting
+                                     model that meets the significance criterion,
+                                     or None if no model meets the criterion.
+        """
+        if not isinstance(spectrum_trace, np.ndarray) or spectrum_trace.size == 0:
+            raise ValueError("spectrum_trace must be a non-empty numpy array.")
+        if not all(isinstance(p, int) and p > 0 for p in peaks_numbers):
+            raise ValueError("peaks_numbers must be a list of positive integers.")
+        if not 0 < significance < 1:
+            raise ValueError("significance must be between 0 and 1.")
 
         x = self.spectral_axis_mhz
         y = spectrum_trace
-        #y = self.image_corrected[1] # Line for debugging purposes
 
-        gresults = []
-        chi2_scores = []
-        fit_out = None
-        for n, gmodel in zip(peaks_numbers, tested_gmodels):
-            # Find peaks
-            pidx, pprop= find_peaks(y, height=0.5, distance=1, prominence=0.4, width=[2, 20])
-            pmax =[]
-            params = lmfit.Parameters()
-            if len(pidx) >= n:
-                s = np.sort(y[pidx].argsort()[-n:])
-                pmax = np.flip(pidx[s])
-                for i in range(n):
-                    params.add(f'g{i}_center', value=x[pmax[i]])
-                    params.add(f'g{i}_amplitude', value=30, min=0.1)
-                    params.add(f'g{i}_sigma', value=7.6, min=4, max=10)
-                
-                fit_result = gmodel.fit(y,params,x=x)
+        best_fit_result = None
+        best_chi2_score = float('inf')
 
-                if fit_result.success:
-                    print(f"Model {n}: The fit converged successfully.")
-                else:
-                    print(f"Model {n}: The fit did not converge.")
+        for n_peaks in sorted(peaks_numbers):
+            if verbose:
+                print(f"\n--- Testing model with {n_peaks} peaks ---")
+            gmodel = self._generate_gmodel(n_peaks)
+            initial_params = self._initialize_peak_parameters(
+                x, y, n_peaks, peak_height, peak_distance, peak_prominence, peak_width
+            )
 
-                chi2_out = fit_result.chisqr
-            
-                dof = len(x) - 3*n
-                chi2_score = chi2.cdf(chi2_out*14, df=dof)
-                chi2_scores.append(chi2_score)
-                if chi2_score < 1-significance:
-                    fit_out = fit_result
-                    print(f'Chi squared for model {n} is: score {chi2_score}; statistic {chi2_out}')
-            else:
-                print(f'Hoped for {n} peaks but found {len(pidx)}')
-                break
-            
-        return fit_out
-            
-    def test_custom_models(self,
-                           models: np.ndarray[CompositeModel]
-                           ):
-        raise NotImplementedError
+            if initial_params is None:
+                continue
+
+            try:
+                fit_result = gmodel.fit(y, initial_params, x=x)
+            except ValueError as e:
+                if verbose:
+                    print(f'Error fitting {n_peaks} peaks model: {e}')
+                continue
+
+            if not fit_result.success:
+                if verbose:
+                    print(f"Model {n_peaks}: The fit did not converge.")
+                continue
+
+            if verbose:
+                print(f"Model {n_peaks}: The fit converged successfully.")
+                # print(fit_result.fit_report()) # Uncomment for detailed fit report
+
+            chi2_statistic = fit_result.chisqr
+            num_fitted_params = len(fit_result.params)
+            dof = len(x) - num_fitted_params
+            if dof <= 0:
+                if verbose:
+                    print(f"Warning: Degrees of freedom for {n_peaks} peaks is {dof}. Cannot perform chi-squared test.")
+                continue
+
+            # Original multiplication retained for consistency, consider if truly intended.
+            chi2_prob = chi2.cdf(chi2_statistic, df=dof)
+
+            if verbose:
+                print(f'Model {n_peaks}: Chi-squared statistic = {chi2_statistic:.2f}, DOF = {dof}, Chi-squared probability = {chi2_prob:.3f}')
+
+            current_model_score = chi2_statistic
+
+            if current_model_score < best_chi2_score:
+                best_chi2_score = current_model_score
+                best_fit_result = fit_result
+                if verbose:
+                    print(f"Model {n_peaks}: Currently the best fit (lowest chi-squared).")
+
+
+        if best_fit_result and verbose:
+            print("\n--- Best Fit Result ---")
+            print(f"Selected model has {len(best_fit_result.components) - 1} peaks (excluding constant).")
+            best_fit_result.plot_fit()
+            plt.title("Best Fit Result")
+            plt.show() # Ensure plot is displayed
+        elif not best_fit_result and verbose:
+            print("\nNo successful fit found for any tested model.")
+
+        return best_fit_result
     
+    def _loss_function_covar(self, params, x, y_exp, C, model_func):
+        """
+        Objective function for fitting with correlated errors.
+
+        params: lmfit Parameters object
+        x: independent data
+        y_exp: experimental data
+        model_func: function that calculates the model prediction
+        L: whitening matrix (from C^-1 = LL^T)
+        """
+        C_inv = np.linalg.inv(C)
+        L = cholesky(C_inv, lower=True)
+
+        y_model = model_func.eval(params, x=x) # Calculate model prediction
+        residuals = y_exp - y_model     # Calculate raw residuals
+        transformed_residuals = L.T @ residuals # Apply whitening transformation
+        
+        return transformed_residuals
+
+    def test_gmodels_covar(self,
+                     spectrum_trace: np.ndarray,
+                     peaks_numbers: list = [1, 2],
+                     significance: float = 0.05,
+                     peak_height: float = 0.5,
+                     peak_distance: float = 1,
+                     peak_prominence: float = 0.7,
+                     peak_width: list = [2, 20],
+                     verbose: bool = False # Added verbose flag
+                     ) -> lmfit.model.ModelResult | None:
+        """
+        Evaluates different Gaussian models based on the number of peaks and
+        returns the best fit result based on a chi-squared significance test.
+
+        Args:
+            spectrum_trace (np.ndarray): The 1D array of spectral intensity data.
+            peaks_numbers (list): A list of integers, each representing a number of
+                                   Gaussian peaks to test in the model.
+            significance (float): The significance level for the chi-squared test.
+            peak_height (float): Passed to scipy.signal.find_peaks. Required height of peaks.
+            peak_distance (float): Passed to scipy.signal.find_peaks. Required minimal horizontal distance (in samples) between neighboring peaks.
+            peak_prominence (float): Passed to scipy.signal.find_peaks. Required prominence of peaks.
+            peak_width (list): Passed to scipy.signal.find_peaks. Required width of peaks in samples as `[min_width, max_width]`.
+            verbose (bool): If True, prints detailed fit information during the process.
+
+        Returns:
+            lmfit.model.ModelResult: The lmfit result object for the best-fitting
+                                     model that meets the significance criterion,
+                                     or None if no model meets the criterion.
+        """
+        if not isinstance(spectrum_trace, np.ndarray) or spectrum_trace.size == 0:
+            raise ValueError("spectrum_trace must be a non-empty numpy array.")
+        if not all(isinstance(p, int) and p > 0 for p in peaks_numbers):
+            raise ValueError("peaks_numbers must be a list of positive integers.")
+        if not 0 < significance < 1:
+            raise ValueError("significance must be between 0 and 1.")
+
+        x = self.spectral_axis_mhz
+        y = spectrum_trace
+
+        best_fit_result = None
+        best_chi2_score = float('inf')
+
+        for n_peaks in sorted(peaks_numbers):
+            if verbose:
+                print(f"\n--- Testing model with {n_peaks} peaks ---")
+            gmodel = self._generate_gmodel(n_peaks)
+            initial_params = self._initialize_peak_parameters(
+                x, y, n_peaks, peak_height, peak_distance, peak_prominence, peak_width
+            )
+
+            if initial_params is None:
+                continue
+
+            try:
+                fit_result = lmfit.minimize(self._loss_function_covar,
+                                            initial_params,
+                                            args=(x, y, self.covariance_matrix, gmodel))
+            except ValueError as e:
+                if verbose:
+                    print(f'Error fitting {n_peaks} peaks model: {e}')
+                continue
+
+            if not fit_result.success:
+                if verbose:
+                    print(f"Model {n_peaks}: The fit did not converge.")
+                continue
+
+            if verbose:
+                print(f"Model {n_peaks}: The fit converged successfully.")
+                # print(fit_result.fit_report()) # Uncomment for detailed fit report
+
+            chi2_statistic = fit_result.chisqr
+            num_fitted_params = len(fit_result.params)
+            dof = len(x) - num_fitted_params
+            if dof <= 0:
+                if verbose:
+                    print(f"Warning: Degrees of freedom for {n_peaks} peaks is {dof}. Cannot perform chi-squared test.")
+                continue
+
+            # Original multiplication retained for consistency, consider if truly intended.
+            chi2_prob = chi2.cdf(chi2_statistic * 5, df=dof)
+
+            if verbose:
+                print(f'Model {n_peaks}: Chi-squared statistic = {chi2_statistic:.2f}, DOF = {dof}, Chi-squared probability = {chi2_prob:.3f}')
+
+            current_model_score = chi2_statistic
+
+            if current_model_score < best_chi2_score:
+                best_chi2_score = current_model_score
+                best_fit_result = fit_result
+                if verbose:
+                    print(f"Model {n_peaks}: Currently the best fit (lowest chi-squared).")
+
+
+        if best_fit_result and verbose:
+            print("\n--- Best Fit Result ---")
+            p = fit_result.params
+            plt.plot(x, y, 'o')
+            plt.plot(x, gmodel.eval(p, x=x), label='best fit')
+            plt.title("Best Fit Result")
+            plt.show() # Ensure plot is displayed
+        elif not best_fit_result and verbose:
+            print("\nNo successful fit found for any tested model.")
+
+        return best_fit_result
+
     def fit_stark_map(self,
-                      peaks_numbers: np.ndarray = [1,2]
-                      ):
-        '''
-        NEEDS REFACTORING
-        '''
-        #x = self.spectral_axis_mhz_bin
+                      peaks_numbers: list = [1, 2], # Changed from np.ndarray to list for type hint clarity
+                      verbose: bool = False,
+                      # Expose find_peaks parameters from test_gmodels
+                      peak_height: float = 0.5,
+                      peak_distance: float = 1,
+                      peak_prominence: float = 0.7,
+                      peak_width: list = [2, 20]
+                      ) -> list[lmfit.model.ModelResult | None]: # Added return type hint
+        """
+        Fits Gaussian models to each trace in the corrected image (Stark map).
+        Iterates through each row of the image and applies the test_gmodels
+        function to find the best-fitting Gaussian model for that trace.
+
+        Args:
+            peaks_numbers (list): A list of integers, each representing a number of
+                                   Gaussian peaks to test for each trace.
+            verbose (bool): If True, enables verbose output from test_gmodels
+                            for each trace fit.
+            peak_height (float): Passed to test_gmodels and scipy.signal.find_peaks.
+            peak_distance (float): Passed to test_gmodels and scipy.signal.find_peaks.
+            peak_prominence (float): Passed to test_gmodels and scipy.signal.find_peaks.
+            peak_width (list): Passed to test_gmodels and scipy.signal.find_peaks.
+
+        Returns:
+            list[lmfit.model.ModelResult | None]: A list of lmfit.model.ModelResult objects
+                                                for each fitted trace, or None if a fit failed.
+                                                The results are also stored in self.fitted_models.
+        Raises:
+            ValueError: If `self.image_corrected` is not available or empty.
+        """
+        if self.image_corrected is None or self.image_corrected.size == 0:
+            raise ValueError("No image data available in self.image_corrected to fit.")
+
         image = self.image_corrected
-
         fitted_models = []
-        for i,y in enumerate(image):
-            print(f'Row {i}')
-            fit = self.test_gmodels(y, peaks_numbers=peaks_numbers)
-            fitted_models.append(fit)
-        self.fitted_models = fitted_models
-        return None
-    
-    def fit_stark_map_enhanced(self,
-                      peaks_numbers: np.ndarray = [1,2]
-                      ):
-        '''
-        NEEDS REFACTORING
-        '''
-        #x = self.spectral_axis_mhz_bin
-        image = self.image_corrected          
 
-        fitted_models = []
-        next_init = []
-        for i,y in enumerate(image):
-            print(f'Row {i}')
-            fit, pidx = self.test_gmodels(y, peaks_numbers=peaks_numbers, init_positions=next_init)
-            if not(fit is None):
-                for i in range(peaks_numbers[0]):
-                        next_init.append(fit.params[f'g{i}_center'].value)
-            fitted_models.append(fit)
+        for i, y_trace in enumerate(image):
+            if verbose:
+                print(f'\nProcessing Row {i+1}/{len(image)}...') # Improved progress message
+            if not(self.covariance_matrix.shape[0] > 0):
+                fit = self.test_gmodels(
+                    y_trace,
+                    peaks_numbers=peaks_numbers,
+                    verbose=verbose,
+                    peak_height=peak_height,
+                    peak_distance=peak_distance,
+                    peak_prominence=peak_prominence,
+                    peak_width=peak_width
+                )
+                fitted_models.append(fit)
+            else:
+                fit = self.test_gmodels_covar(
+                    y_trace,
+                    peaks_numbers=peaks_numbers,
+                    verbose=verbose,
+                    peak_height=peak_height,
+                    peak_distance=peak_distance,
+                    peak_prominence=peak_prominence,
+                    peak_width=peak_width
+                )
+                fitted_models.append(fit)
+
         self.fitted_models = fitted_models
-        return None
+        return fitted_models # Return the list of fitted models
+
+    def _extract_fit_parameters(self, fitted_models: list[lmfit.model.ModelResult | None]):
+        """
+        Extracts parameters and their errors from a list of lmfit ModelResult objects.
+
+        Args:
+            fitted_models (list): A list of lmfit.model.ModelResult objects or None.
+
+        Returns:
+            tuple: A tuple containing:
+                   - x_data (np.ndarray): The x-axis data corresponding to valid models.
+                   - results_dict (dict): A dictionary containing extracted 'centers',
+                                          'amplitudes', 'fwhm' and their 'errors'.
+                   - n_peaks_max (int): The maximum number of peaks found across all valid models.
+        """
+        # Filter out None models and get corresponding x-axis data
+        none_mask = np.array([f is None for f in fitted_models])
+        valid_models = np.array(fitted_models)[~none_mask]
+        x_data = self.x_axis_mm_bin[~none_mask]
+
+        if not valid_models.size > 0:
+            print("No valid fitted models to extract parameters from.")
+            return np.array([]), {}, 0
+
+        # Determine maximum number of peaks across all valid models
+        # A Gaussian model adds 3 parameters (center, amplitude, sigma) + 1 for constant background
+        # So, num_peaks = (len(params) - 1) / 3
+        # Ensure conversion to int for peak count
+        n_peaks_per_model = [(len(fm.params) - 1) // 3 for fm in valid_models]
+        n_peaks_max = int(np.max(n_peaks_per_model)) if n_peaks_per_model else 0
+
+        # Initialize dictionary to store results
+        results_dict = {
+            'centers': np.full((n_peaks_max, len(valid_models)), np.nan),
+            'amplitudes': np.full((n_peaks_max, len(valid_models)), np.nan),
+            'fwhm': np.full((n_peaks_max, len(valid_models)), np.nan),
+            'centers_err': np.full((n_peaks_max, len(valid_models)), np.nan),
+            'amplitudes_err': np.full((n_peaks_max, len(valid_models)), np.nan),
+            'fwhm_err': np.full((n_peaks_max, len(valid_models)), np.nan),
+        }
+
+        # Populate the results dictionary
+        # FWHM conversion factor is 2*sqrt(2*ln(2))
+        fwhm_coef = 2 * np.sqrt(2 * np.log(2)) # Assuming sigma from lmfit is standard deviation
+                                             # The original code had 2.3538, which is approximately 2*sqrt(2*ln(2))
+
+        for j, vm in enumerate(valid_models):
+            current_n_peaks = (len(vm.params) - 1) // 3
+            for i in range(current_n_peaks):
+                # Extract values
+                results_dict['centers'][i, j] = vm.params[f'g{i}_center'].value
+                results_dict['amplitudes'][i, j] = vm.params[f'g{i}_amplitude'].value
+                results_dict['fwhm'][i, j] = vm.params[f'g{i}_sigma'].value * fwhm_coef # Convert sigma to FWHM
+
+                # Extract errors (stderr will be None if not estimated)
+                results_dict['centers_err'][i, j] = vm.params[f'g{i}_center'].stderr
+                results_dict['amplitudes_err'][i, j] = vm.params[f'g{i}_amplitude'].stderr
+                results_dict['fwhm_err'][i, j] = vm.params[f'g{i}_sigma'].stderr * fwhm_coef if vm.params[f'g{i}_sigma'].stderr is not None else np.nan
+
+        return x_data, results_dict, n_peaks_max
+
 
     
     def plot_gmodel_results(self,
-                         transitions_str: str = []
-                         ):
-        '''
-        NEEDS REFACTORING
-        '''
-        transitions_labels = transitions_str.split(sep=',')
-        
-        fitted_models = np.array(self.fitted_models)
+                            transitions_labels: list[str] | str | None = None, # Allow list, string, or None
+                            marker_style: list[str] = ['o', 'v', 's', '^', '*'],
+                            marker_size: int = 3,
+                            figsize: tuple[int, int] = (4, 7),
+                            y_lim_centers: tuple[int, int] = (-700, 200),
+                            ) -> tuple[plt.Figure, plt.Axes] | None: # Return type hint for clarity
+        """
+        Plots the extracted parameters (centers, amplitudes, FWHM) from fitted Gaussian models.
 
+        Args:
+            transitions_labels (list[str] | str | None): A list of strings for legend labels,
+                                                           or a comma-separated string, or None.
+            marker_style (list[str]): List of matplotlib marker styles to cycle through for peaks.
+            marker_size (int): Size of the markers in the plots.
+            figsize (tuple[int, int]): Figure size for the plot (width, height).
+            y_lim_centers (tuple[int, int]): Y-axis limits for the 'centers' plot.
 
-        none_mask = np.array([f is None for f in fitted_models])
-        valid_models = fitted_models[~none_mask]
-        x = self.x_axis_mm_bin[~none_mask]
+        Returns:
+            tuple[plt.Figure, plt.Axes] | None: A tuple containing the matplotlib Figure and Axes objects,
+                                                 or None if no valid models were found.
+        Raises:
+            ValueError: If `self.fitted_models` is not set or empty.
+            ValueError: If `self.x_axis_mm_bin` is not set or does not match `fitted_models` length.
+        """
+        if not hasattr(self, 'fitted_models') or not self.fitted_models:
+            raise ValueError("No fitted models found. Run fit_stark_map first.")
+        if not hasattr(self, 'x_axis_mm_bin') or self.x_axis_mm_bin is None:
+             raise ValueError("x_axis_mm_bin (distance axis) is not set. Cannot plot results.")
+        if len(self.x_axis_mm_bin) != len(self.fitted_models):
+            raise ValueError("Length of x_axis_mm_bin does not match the number of fitted models.")
 
-        n_models = len(valid_models)
-        n_params = [len(fm.params) for fm in valid_models]
-        n_params_max = np.max(n_params)
-        n_peaks_max = int(n_params_max/3)
+        # Handle transitions_labels input
+        if isinstance(transitions_labels, str):
+            transitions_labels = transitions_labels.split(',')
+        elif transitions_labels is None:
+            transitions_labels = [] # Default to empty list if None
 
-        results_array = np.empty((n_params_max, n_models))
-        error_array = np.empty((n_params_max, n_models))
-        results_array.fill(np.nan)
-        error_array.fill(np.nan)
+        # --- Data Extraction ---
+        x_data, results_dict, n_peaks_max = self._extract_fit_parameters(self.fitted_models)
 
+        if not x_data.size > 0:
+            print("No valid data to plot after extraction.")
+            return None
 
-        results_dict = {'centers': np.empty((n_peaks_max, n_models)),
-                        'amplitudes': np.empty((n_peaks_max, n_models)),
-                        'fwhm': np.empty((n_peaks_max, n_models)),
-                        'centers_err': np.empty((n_peaks_max, n_models)),
-                        'amplitudes_err': np.empty((n_peaks_max, n_models)),
-                        'fwhm_err': np.empty((n_peaks_max, n_models)),
-                        }
+        # --- Plotting ---
+        fig1, ax1 = plt.subplots(3, 1, sharex=True, figsize=figsize)
 
-        fhwhm_coef = 2.3538
         for i in range(n_peaks_max):
-            print('n_params:', n_params[i])
-            if i<int(n_params[i]/3):
-                results_dict['centers'][i] = np.array([r.params[f'g{i}_center'].value for r in valid_models], dtype=float)
-                results_dict['amplitudes'][i] = np.array([r.params[f'g{i}_amplitude'].value for r in valid_models], dtype=float)
-                results_dict['fwhm'][i] = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].value for r in valid_models], dtype=float)
-                results_dict['centers_err'][i] = np.array([r.params[f'g{i}_center'].stderr for r in valid_models], dtype=float)
-                results_dict['amplitudes_err'][i] = np.array([r.params[f'g{i}_amplitude'].stderr for r in valid_models], dtype=float)
-                results_dict['fwhm_err'][i] = fhwhm_coef*np.array([r.params[f'g{i}_sigma'].stderr for r in valid_models], dtype=float)
-            else: pass        
-        m = ['o', 'v', 's', '^', '*']
+            # Determine marker and label for the current peak
+            current_marker = marker_style[i % len(marker_style)]
+            label = transitions_labels[i] if i < len(transitions_labels) else f'Peak {i+1}'
 
-        fig1, ax1 = plt.subplots(3,1, sharex=True, figsize=(4,7))
-        marker_size = 3
-        for i in range(n_peaks_max):
-            centers = results_dict['centers'][i]
-            centers_error = results_dict['centers_err'][i]
-            ax1[0].errorbar(x=x, y=centers, yerr=centers_error, color=f'C{i}',linestyle='None')
-            ax1[0].plot(x,centers,marker=m[i],color=f'C{i}', markersize=marker_size,linestyle='None')
+            # Plot Centers
+            ax1[0].errorbar(x=x_data, y=results_dict['centers'][i], yerr=results_dict['centers_err'][i],
+                             color=f'C{i}', linestyle='None', label=label, capsize=2)
+            ax1[0].plot(x_data, results_dict['centers'][i], marker=current_marker, color=f'C{i}',
+                        markersize=marker_size, linestyle='None')
             ax1[0].set_ylabel('Blue Detuning (MHz)')
-            ax1[0].set_ylim((-700,200))
+            ax1[0].set_ylim(y_lim_centers)
+            ax1[0].grid(True, linestyle=':', alpha=0.6)
 
-            amplitudes = results_dict['amplitudes'][i]
-            amplitudes_error = results_dict['amplitudes_err'][i]
-            ax1[1].plot(x, amplitudes, marker=m[i], color=f'C{i}', alpha=0.5, markersize=marker_size, linestyle='None')
-            ax1[1].errorbar(x,
-                            amplitudes,
-                            yerr=amplitudes_error,
-                            linestyle='None',
-                            color=f'C{i}',
-                            alpha = 0.4)
+
+            # Plot Amplitudes
+            ax1[1].errorbar(x=x_data, y=results_dict['amplitudes'][i], yerr=results_dict['amplitudes_err'][i],
+                             linestyle='None', color=f'C{i}', alpha=0.6, capsize=2)
+            ax1[1].plot(x_data, results_dict['amplitudes'][i], marker=current_marker, color=f'C{i}',
+                        alpha=0.5, markersize=marker_size, linestyle='None')
             ax1[1].set_ylabel('Amplitude (rel. units)')
+            ax1[1].grid(True, linestyle=':', alpha=0.6)
 
-            fwhm = results_dict['fwhm'][i]
-            fwhm_error = results_dict['fwhm_err'][i]
-            ax1[2].plot(x, fwhm, marker=m[i], color=f'C{i}', alpha = 0.3, markersize=marker_size, linestyle='None')
-            ax1[2].errorbar(x = x,
-                            y = fwhm,
-                            yerr = fwhm_error,
-                            linestyle='None',
-                            color=f'C{i}',
-                            alpha = 0.3)
+
+            # Plot FWHM
+            ax1[2].errorbar(x=x_data, y=results_dict['fwhm'][i], yerr=results_dict['fwhm_err'][i],
+                             linestyle='None', color=f'C{i}', alpha=0.6, capsize=2)
+            ax1[2].plot(x_data, results_dict['fwhm'][i], marker=current_marker, color=f'C{i}',
+                        alpha=0.5, markersize=marker_size, linestyle='None')
             ax1[2].set_xlabel('Distance (mm)')
             ax1[2].set_ylabel('FWHM (MHz)')
+            ax1[2].grid(True, linestyle=':', alpha=0.6)
+
+        # Add legends
+        ax1[0].legend(loc='best', title='Transitions')
+        # You might want separate legends for amplitude/FWHM if labels apply uniquely
+        # For simplicity, I'm just adding one legend.
+
+        fig1.tight_layout()
+        plt.show()
+
+        return fig1, ax1
      
     def plot_image_slice(self, 
                          distance = 0 # (mm) distance along the beam
@@ -942,9 +1294,9 @@ class FLStarkMapProcessor():
         ax.legend()
         
     
-    def _baseline_image(self):
-        im_out = np.copy(self.image_binned)
-        for i,c in enumerate(self.image_binned):
+    def _baseline_image(self, image):
+        im_out = np.copy(image)
+        for i,c in enumerate(image):
             baseline_fitter = Baseline(x_data=np.arange(c.shape[0]))
             bkg, _ = baseline_fitter.asls(c, lam=1e5, p=0.1)
             im_out[i] = c - bkg
@@ -994,6 +1346,9 @@ class FLStarkMapProcessor():
     
     def get_ycoord(self):
         return self.spectral_axis_mhz
+    
+    def get_covariance(self):
+        return self.covariance_matrix
 
     
 def read_files(dirpath_str: str, 
@@ -1048,23 +1403,21 @@ def read_files(dirpath_str: str,
 
 #%%
 if __name__ == "__main__":
+
     #ommit_files = [1,2,3,4,5,6,7,10,16,18,19,20,23,28,30,48]
     ommit_files = []
 
-    # dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-06-26\\processed'
-    dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-07-01\\processed'
+    dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-06-26\\processed'
+    #dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-07-01\\processed'
 
     fl_data, fl_files = read_files(dirpath, key='spec', files_idx_ommit=ommit_files)
     ref_data, ref_files = read_files(dirpath, key='sync', files_idx_ommit=ommit_files)
-
-
-    
 
 #%%
     fps = 12.8 # Hz
     sweep = 0.05 # Hz
     fov = 10.8 # mm
-    image_number = 78
+    image_number = 20#37#
     img = np.copy(fl_data[image_number])
     ref = np.copy(ref_data[image_number]).T
     print(ref.shape)
@@ -1076,20 +1429,26 @@ if __name__ == "__main__":
                               sweep,
                               fov,
                               bin_power=3)
-    
 # %%
     fig = fsm.plot_calibration(figsize=(6,6))
 
 # %%
+    #mpl.rcParams={'fontsize': 14}
     fig = fsm.plot_stark_map(False)
-    fig = fsm.plot_corrected_stark_map()
+    fig = fsm.plot_corrected_stark_map(figsize=(6,5))
 # %%
-    fsm.plot_image_slice(2)
+    fsm.plot_image_slice(6)
 # %%
-    fsm.fit_stark_map([3,4,5])
+    # fsm.set_background_covariance(fl_data[-5])
+    # fsm.plot_covariance()
+    # fsm.get_covariance()
+
+# %%
+    fsm.fit_stark_map([2,3,4,5], verbose=False, peak_height=0.8, peak_prominence=0.8)
 
 #%%
     #plot_labels = '$44D_{5/2}$: $|m_J|=5/2$,$44D_{5/2}$: $|m_J|=1/2$,$44D_{5/2}$: $|m_J|=3/2$,$44D_{3/2}$: $|m_J|=1/2$,$44D_{3/2}$: $|m_J|=1/2$'
-    plot_labels = str([])
-    fsm.plot_gmodel_results(plot_labels)
+    plot_labels = None
+    fsm.plot_gmodel_results(plot_labels,
+                            y_lim_centers=(-650,100))
 # %%
