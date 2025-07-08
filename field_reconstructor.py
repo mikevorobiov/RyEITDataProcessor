@@ -16,10 +16,6 @@ from lmfit.models import GaussianModel, ConstantModel
 from scipy.stats import chi2
 from scipy.linalg import cholesky
 
-from skimage import feature
-from sklearn.preprocessing import Binarizer
-from skimage.morphology import skeletonize
-
 import os
 from os.path import join
 
@@ -1538,7 +1534,7 @@ if __name__ == "__main__":
     fps = 12.8 # Hz
     sweep = 0.05 # Hz
     fov = 10.8 # mm
-    image_number = 37#
+    image_number = 38#
     img = np.copy(fl_data[image_number])
     ref = np.copy(ref_data[image_number]).T
     print(ref.shape)
@@ -1557,16 +1553,16 @@ if __name__ == "__main__":
     fig = fsm.plot_stark_map(False)
     fig = fsm.plot_corrected_stark_map(figsize=(6,5))
 # %%
-    fsm.plot_image_slice(2)
+    fsm.plot_image_slice(8)
 # %%
     # fsm.set_background_covariance(fl_data[-5])
     # fsm.plot_covariance()
     # fsm.get_covariance()
 
 # %%
-    fsm.fit_stark_map([3,4,5], 
-                      verbose=False, 
-                      peak_height=0.7, 
+    fsm.fit_stark_map([2,3,4,5], 
+                      verbose=True, 
+                      peak_height=0.5, 
                       peak_prominence=0.5, 
                       peak_distance=1)
 
