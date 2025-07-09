@@ -75,7 +75,6 @@ class FLStarkMapProcessor():
         # --- Perform initial calibration and axis generation ---
         try:
             # Assume _calibrate_axis sets self.calibrations_dict
-            print('Hello!')
             self.calibrations_dict = self._calibrate_axis()
             # Spatial axis (X-axis)
             self.x_axis_mm = np.linspace(0, self.fov, self.raw_image.shape[0])
@@ -270,16 +269,12 @@ class FLStarkMapProcessor():
         x, y = signal
         yf = wiener(y, mysize=10)
         try:
-            plt.plot(x,y)
-            plt.plot(x, yf)
             peak_indices = self._find_eit_peaks(yf,
                                                 number_of_peaks = number_of_peaks,
                                                 min_peak_width = min_peak_width,
                                                 max_peak_width = max_peak_width,
                                                 min_peak_distance = min_peak_distance,
                                                 prominence = prominence)
-            #plt.plot(x[peak_indices], y[peak_indices], 'o', color='r')
-            print(peak_indices)
         except ValueError:
             print('Error: Less than 2 peaks found. Cannot continue fitting calibration trace!')
             
