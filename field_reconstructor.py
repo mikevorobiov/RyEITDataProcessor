@@ -9,7 +9,7 @@ from pybaselines import Baseline
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, wiener
 import lmfit
 from lmfit import CompositeModel # Ensure CompositeModel is imported
 from lmfit.models import GaussianModel, ConstantModel
@@ -58,7 +58,7 @@ class FLStarkMapProcessor():
                           a fundamental issue with the input data or `calibrate_axis` method.
         """
         # Store raw input data
-        self.raw_image = image # Renamed for clarity vs. processed images
+        self.raw_image = image
         self.raw_reference_trace = reference_trace
         # Store basic experimental parameters (better setup dictionary)
         self.fps = fps
@@ -75,6 +75,7 @@ class FLStarkMapProcessor():
         # --- Perform initial calibration and axis generation ---
         try:
             # Assume _calibrate_axis sets self.calibrations_dict
+            print('Hello!')
             self.calibrations_dict = self._calibrate_axis()
             # Spatial axis (X-axis)
             self.x_axis_mm = np.linspace(0, self.fov, self.raw_image.shape[0])
@@ -170,9 +171,11 @@ class FLStarkMapProcessor():
     def _find_eit_peaks(self,
                        signal: np.ndarray,
                        number_of_peaks: int = 2,
-                       min_peak_width: int = 20,
+                       min_peak_width: int = 15,
                        max_peak_width: int = 300,
-                       min_peak_distance: int = 100,
+                       min_peak_distance: int = 600,
+                       prominence: float = 0.5,
+                       filter_window_size: int = 30,  
                        return_peak_properties: bool = False
                        ) -> np.ndarray:
         """
@@ -200,13 +203,14 @@ class FLStarkMapProcessor():
         Raises:
             ValueError: If fewer than 'number_of_peaks' are found based on the criteria.
         """
+        
+
         # Find all peaks that satisfy the width and distance criteria
         peak_indices, properties = find_peaks(
             signal,
             width=[min_peak_width, max_peak_width],
             distance=min_peak_distance,
-            # You might also consider 'height' or 'prominence' here if relevant
-            # for initial filtering, but sorting by amplitude later is also fine.
+            prominence=prominence
         )
 
         if len(peak_indices) < number_of_peaks:
@@ -236,7 +240,13 @@ class FLStarkMapProcessor():
 
 
 
-    def _calibrate_axis(self):
+    def _calibrate_axis(self,
+                        number_of_peaks: int = 2,
+                        min_peak_width: int = 5,
+                        max_peak_width: int = 500,
+                        min_peak_distance: int = 400,
+                        prominence = 0.0
+                        ):
         """Calculates the time-to-frequency conversion factor from EIT peaks.
 
         This function analyzes the time-domain data of two Electromagnetically Induced
@@ -258,11 +268,22 @@ class FLStarkMapProcessor():
         """
         signal, background = self._correct_ref_baseline()
         x, y = signal
-
+        yf = wiener(y, mysize=10)
         try:
-            peak_indices = self._find_eit_peaks(y, number_of_peaks=2)
+            plt.plot(x,y)
+            plt.plot(x, yf)
+            peak_indices = self._find_eit_peaks(yf,
+                                                number_of_peaks = number_of_peaks,
+                                                min_peak_width = min_peak_width,
+                                                max_peak_width = max_peak_width,
+                                                min_peak_distance = min_peak_distance,
+                                                prominence = prominence)
+            #plt.plot(x[peak_indices], y[peak_indices], 'o', color='r')
+            print(peak_indices)
         except ValueError:
             print('Error: Less than 2 peaks found. Cannot continue fitting calibration trace!')
+            
+            
 
         # Fit two-gaussians model        
         gmodel = GaussianModel(prefix='d52_') + GaussianModel(prefix='d32_')
@@ -295,7 +316,6 @@ class FLStarkMapProcessor():
                                  }
 
         return out_calibrations_dict
-
 
     def plot_calibration_probing(self):
         """
@@ -1052,115 +1072,6 @@ class FLStarkMapProcessor():
 
         return best_fit_result
 
-    def test_custom_models(self,
-                     spectrum_trace: np.ndarray,
-                     models_list: list,
-                     peaks_numbers: list = [1, 2],
-                     significance: float = 0.05,
-                     peak_height: float = 0.5,
-                     peak_distance: float = 1,
-                     peak_prominence: float = 0.7,
-                     peak_width: list = [2, 20],
-                     verbose: bool = False # Added verbose flag
-                     ) -> lmfit.model.ModelResult | None:
-        """
-        Evaluates different Gaussian models based on the number of peaks and
-        returns the best fit result based on a chi-squared significance test.
-
-        Args:
-            spectrum_trace (np.ndarray): The 1D array of spectral intensity data.
-            peaks_numbers (list): A list of integers, each representing a number of
-                                   Gaussian peaks to test in the model.
-            significance (float): The significance level for the chi-squared test.
-            peak_height (float): Passed to scipy.signal.find_peaks. Required height of peaks.
-            peak_distance (float): Passed to scipy.signal.find_peaks. Required minimal horizontal distance (in samples) between neighboring peaks.
-            peak_prominence (float): Passed to scipy.signal.find_peaks. Required prominence of peaks.
-            peak_width (list): Passed to scipy.signal.find_peaks. Required width of peaks in samples as `[min_width, max_width]`.
-            verbose (bool): If True, prints detailed fit information during the process.
-
-        Returns:
-            lmfit.model.ModelResult: The lmfit result object for the best-fitting
-                                     model that meets the significance criterion,
-                                     or None if no model meets the criterion.
-        """
-        if not isinstance(spectrum_trace, np.ndarray) or spectrum_trace.size == 0:
-            raise ValueError("spectrum_trace must be a non-empty numpy array.")
-        if not all(isinstance(p, int) and p > 0 for p in peaks_numbers):
-            raise ValueError("peaks_numbers must be a list of positive integers.")
-        if not 0 < significance < 1:
-            raise ValueError("significance must be between 0 and 1.")
-
-        x = self.spectral_axis_mhz
-        y = spectrum_trace
-
-        best_fit_result = None
-        best_chi2_score = float('inf')
-
-        for model in models_list:
-            if verbose:
-                print(f"\n--- Testing model with {n_peaks} peaks ---")
-            gmodel = m
-            initial_params = self._initialize_peak_parameters(
-                x, y, n_peaks, peak_height, peak_distance, peak_prominence, peak_width
-            )
-
-            if initial_params is None:
-                continue
-
-            try:
-                fit_result = gmodel.fit(y, initial_params, x=x)
-            except ValueError as e:
-                if verbose:
-                    print(f'Error fitting {n_peaks} peaks model: {e}')
-                continue
-
-            if not fit_result.success:
-                if verbose:
-                    print(f"Model {n_peaks}: The fit did not converge.")
-                continue
-
-            if verbose:
-                print(f"Model {n_peaks}: The fit converged successfully.")
-                # print(fit_result.fit_report()) # Uncomment for detailed fit report
-
-            chi2_statistic = fit_result.chisqr
-            num_fitted_params = len(fit_result.params)
-            dof = len(x) - num_fitted_params
-            if dof <= 0:
-                if verbose:
-                    print(f"Warning: Degrees of freedom for {n_peaks} peaks is {dof}. Cannot perform chi-squared test.")
-                continue
-
-           # Calculate probability of the result based on the chi2 statistic
-            chi2_prob = chi2.cdf(chi2_statistic, df=dof)
-
-            if verbose:
-                print(f'Model {n_peaks}: Chi-squared statistic = {chi2_statistic:.2f}, DOF = {dof}, Chi-squared probability = {chi2_prob:.3f}')
-
-            # Save current model's chi2 statistic value
-            current_model_score = chi2_statistic
-
-            # If the chi2 statistic is smaller than the best previous chi2 statistic
-            # then current statistic becomes the best and the corresponding best fit_result is saved 
-            if current_model_score < best_chi2_score:
-                best_chi2_score = current_model_score
-                best_fit_result = fit_result
-                if verbose:
-                    print(f"Model {n_peaks}: Currently the best fit (lowest chi-squared).")
-
-
-        if best_fit_result and verbose:
-            print("\n--- Best Fit Result ---")
-            print(f"Selected model has {len(best_fit_result.components) - 1} peaks (excluding constant).")
-            best_fit_result.plot_fit()
-            plt.title("Best Fit Result")
-            plt.show() # Ensure plot is displayed
-        elif not best_fit_result and verbose:
-            print("\nNo successful fit found for any tested model.")
-
-        return best_fit_result
-
-
     def fit_stark_map(self,
                       peaks_numbers: list = [1, 2], # Changed from np.ndarray to list for type hint clarity
                       verbose: bool = False,
@@ -1269,8 +1180,7 @@ class FLStarkMapProcessor():
 
         # Populate the results dictionary
         # FWHM conversion factor is 2*sqrt(2*ln(2))
-        fwhm_coef = 2 * np.sqrt(2 * np.log(2)) # Assuming sigma from lmfit is standard deviation
-                                             # The original code had 2.3538, which is approximately 2*sqrt(2*ln(2))
+        fwhm_coef = 2 * np.sqrt(2 * np.log(2)) # Sigma from lmfit is standard deviation
 
         for j, vm in enumerate(valid_models):
             current_n_peaks = (len(vm.params) - 1) // 3
@@ -1483,14 +1393,15 @@ def read_files(dirpath_str: str,
             file_idxs = [int(f[2]) for f in split_names]
         except ValueError:
             print('Error: Cannot convert string file # to integer!')
-        valid_files = [f for id,f in zip(file_idxs, files_list) if id not in files_idx_ommit]
-        valid_files_sorted = sorted(list(zip(file_idxs,valid_files)))
+        valid_files = [(id,f) for id,f in zip(file_idxs, files_list) if id not in files_idx_ommit]
+        valid_files_sorted = sorted(valid_files)
+        print()
         valid_files_paths = [join(dirpath_str, s[1]) for s in valid_files_sorted]
         
         data = None
         for f in valid_files_paths:
+            print(f.split('\\')[-1])
             current_data = np.genfromtxt(f,delimiter=delimiter,comments=comments)
-            print(current_data.shape)
             if data is None:
                 data = current_data[np.newaxis]
             else:
@@ -1509,7 +1420,6 @@ def read_files(dirpath_str: str,
                     data = np.append(data, current_data[np.newaxis,:data_dims[1]] , axis=0)
                 else:
                     data = np.append(data, current_data[np.newaxis] , axis=0)
-            print(data.shape)
         return data, valid_files_paths
     else:
         print("Provided path does no exist! ", dirpath_str)
@@ -1522,10 +1432,10 @@ def read_files(dirpath_str: str,
 if __name__ == "__main__":
 
     #ommit_files = [1,2,3,4,5,6,7,10,16,18,19,20,23,28,30,48]
-    ommit_files = []
+    ommit_files = [0,1,2,3,4,5,7,8,10,11,12,13,21,108]
 
-    dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-06-26\\processed'
-    #dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-07-01\\processed'
+    #dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-06-26\\processed'
+    dirpath = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-07-01\\processed'
 
     fl_data, fl_files = read_files(dirpath, key='spec', files_idx_ommit=ommit_files)
     ref_data, ref_files = read_files(dirpath, key='sync', files_idx_ommit=ommit_files)
@@ -1534,9 +1444,13 @@ if __name__ == "__main__":
     fps = 12.8 # Hz
     sweep = 0.05 # Hz
     fov = 10.8 # mm
-    image_number = 38#
-    img = np.copy(fl_data[image_number])
-    ref = np.copy(ref_data[image_number]).T
+    image_number = 68#
+    fl_idxs = np.array([int(f.split('\\')[-1].split('-')[2]) for f in fl_files])
+    print(fl_idxs)
+    id = np.where(fl_idxs==image_number)[0]
+
+    img = np.copy(fl_data[id][0])
+    ref = np.copy(ref_data[id][0]).T
     print(ref.shape)
     print(img.shape)
 #%%
@@ -1603,4 +1517,6 @@ if __name__ == "__main__":
 # params2 = lmfit.Parameters()
 
 # models_dict = {'model_1': }
+# %%
+    fsm.recalibrate_axis()
 # %%
