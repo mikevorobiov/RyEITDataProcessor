@@ -134,12 +134,35 @@ class StarkMapGenerator():
         im = self._vertical_binning(self.bin_images[0], 5)
         fig, ax = plt.subplots()
         ax.pcolormesh(im, cmap='jet')
+
+    def generate_stark_maps(self):
+        stark_maps_raw = self.bin_images.transpose(1, 0, 2)
+        print(stark_maps_raw.shape)
+        n_maps, n_freq, n_spatial = stark_maps_raw.shape
+        baseline_intensity = np.repeat(stark_maps_raw[:,0][:,:,np.newaxis], 
+                                       repeats=n_freq, 
+                                       axis=2).transpose(0,2,1)
+        print(baseline_intensity.shape)
+        intensity_ratio = np.divide(stark_maps_raw, baseline_intensity)
+        stark_maps = (np.ones(stark_maps_raw.shape) - intensity_ratio)*100
+
+        return stark_maps
     
 
 # %%
 if __name__ == '__main__':
-    path = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-08-07\\data\\data-imgs-3-2025-08-07.npz'
+    path = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-08-07\\data\\data-imgs-2-2025-08-07.npz'
     sm = StarkMapGenerator(path, bin_power=6)
     sm.plot_batch_imgs(binned=True)
-
+    stark_maps = sm.generate_stark_maps()
+# %%
+    nspec, ny, nx = stark_maps.shape
+    fig, ax = plt.subplots(nrows=nspec, figsize=(3,7))
+    flat_stark_maps = stark_maps.flatten()
+    glob_max = np.max(flat_stark_maps)
+    glob_min = np.min(flat_stark_maps)
+    for a,s in zip(ax, stark_maps):
+        a.pcolormesh(s, cmap='inferno', 
+                     vmin=glob_min,
+                     vmax=glob_max)
 # %%
