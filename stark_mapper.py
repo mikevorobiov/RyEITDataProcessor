@@ -11,7 +11,8 @@ class StarkMapGenerator():
     def __init__(self, images, 
                  fps_hz=13.68, 
                  fov_mm=(10.8,7.2), 
-                 camera_resolution=(1536,1024)
+                 camera_resolution=(1536,1024),
+                 bin_power=2
                  ):
         
         self.fps = fps_hz # FPS in Hz
@@ -19,6 +20,7 @@ class StarkMapGenerator():
         self.resolution_full = camera_resolution # Full camera resolution
         if isinstance(images, str):
             self.raw_images = self._read_images_batch(images)
+            self.bin_images = self.vertical_bin_all_images(bin_power)
         else:
             self.raw_images = None
             print(f'ERROR: "{images}" is not a path. Provide valid path to npz file with images.')
@@ -40,18 +42,22 @@ class StarkMapGenerator():
             print(f"The file '{file_path}' does not exist or is not a file.")
             return None
         
-    def plot_batch_imgs(self, figsize=(6,6)):
+    def plot_batch_imgs(self, figsize=(6,6), binned=False):
         if not self.raw_images is None:
-            n_imgs = self.raw_images.shape[0]
+            if binned:
+                images = self.bin_images
+            else:
+                images = self.raw_images
+            n_imgs = images.shape[0]
             idxs = np.sort(np.random.choice(np.arange(n_imgs),size=8,replace=False))
-            imgs_batch = self.raw_images[idxs]
+            imgs_batch = images[idxs]
             global_min = np.min(np.ndarray.flatten(imgs_batch))
             global_max = np.max(np.ndarray.flatten(imgs_batch))
             fig, ax = plt.subplots(4,2, dpi=300)
             fig.set_size_inches(figsize)
             axs = np.ndarray.flatten(ax)
             for a, im, i in zip(axs, imgs_batch, idxs):
-                a.imshow(im, cmap='jet', vmin=global_min, vmax=global_max)
+                a.pcolormesh(im, cmap='jet', vmin=global_min, vmax=global_max)
                 a.set_title(f'Image #{i}')
             fig.tight_layout()
             fig.suptitle('Random batch of images')
@@ -59,7 +65,7 @@ class StarkMapGenerator():
         else:
             print('ERROR: No images batch to plot.')
 
-    def _bin_image(self, image, bin_power) -> np.ndarray:
+    def _vertical_binning(self, image, bin_power) -> np.ndarray:
 
         # 1. Validate input attributes
         if not isinstance(image, np.ndarray):
@@ -115,8 +121,17 @@ class StarkMapGenerator():
 
         return image_bin
     
+    def vertical_bin_all_images(self, bin_power):
+        n_imgs, ny, nx = self.raw_images.shape
+        ny_binned = int(ny / 2**bin_power)
+        print(self.raw_images.shape)
+        binned_images = np.zeros((n_imgs, ny_binned, nx))
+        for i, im in enumerate(self.raw_images):
+            binned_images[i] = self._vertical_binning(im, bin_power)
+        return binned_images
+    
     def plot_bin(self):
-        im = self._bin_image(self.raw_images[0], 5)
+        im = self._vertical_binning(self.bin_images[0], 5)
         fig, ax = plt.subplots()
         ax.pcolormesh(im, cmap='jet')
     
@@ -124,9 +139,7 @@ class StarkMapGenerator():
 # %%
 if __name__ == '__main__':
     path = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-08-07\\data\\data-imgs-3-2025-08-07.npz'
-    sm = StarkMapGenerator(path)
-    sm.plot_batch_imgs()
-    plt.close()
-    sm.plot_bin()
+    sm = StarkMapGenerator(path, bin_power=6)
+    sm.plot_batch_imgs(binned=True)
 
 # %%
