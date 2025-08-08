@@ -478,7 +478,9 @@ class LangmuirProcessor():
     def clipboard_plasma_parameters(self):
         raise NotImplementedError
     
-
+    def get_corrected_electron_data(self):
+        x, _ = self.get_electron_part()
+        return x, self.corrected_electron_part
 
 #%%
 if __name__=='__main__':
@@ -527,8 +529,8 @@ if __name__=='__main__':
                                     ebeam_params=ebeam_pars,
                                     esaturation_params=sat_pars,
                                     residuals_percent=15,
-                                    ylim=[1e-6, 1e-2],
-                                    xlim=[35,45])
+                                    ylim=[1e-6, 1e-1],
+                                    xlim=[30,60])
 
 # %%
     pars = lp.get_plasma_parameters()
@@ -538,4 +540,29 @@ if __name__=='__main__':
         print(p+f': {v:.4e}')
 # %%
     lp.plasma_parameters_as_markdown_row(pars, copy_to_clipboard=True, generate_header=True)
+# %%
+    xc, yc = lp.get_corrected_electron_data()
+    fig, ax = plt.subplots(figsize=(3,2))
+    ax.plot(xc, yc, 'o', alpha=0.5, markersize=3.5)
+    ax.plot(xc, 
+            lp._expf(
+                xc,
+                maxwell_pars['amplitude'],
+                maxwell_pars['temperature'],
+                maxwell_pars['Vs']
+                ),
+            'C3')
+    ax.plot(xc, 
+            lp._expf(
+                xc,
+                sat_pars['amplitude'],
+                sat_pars['temperature']
+                ))
+    ax.set_yscale('log')
+    ax.set_xlim([35,60])
+    ax.set_ylim([5e-6,1e-2])
+    ax.set_xlabel('Voltage (V)')
+    ax.set_ylabel('Probe current (A)')
+    ax.grid(True)
+    fig.set_dpi(300)
 # %%
