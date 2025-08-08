@@ -3,11 +3,13 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
+from pybaselines import Baseline
+
 import os
 
 
 #%%
-class StarkMapGenerator():
+class StarkMapsGenerator():
     def __init__(self, images, 
                  fps_hz=13.68, # Hz
                  laser_sweep=0.1, # Hz
@@ -23,6 +25,8 @@ class StarkMapGenerator():
         if isinstance(images, str):
             self.raw_images = self._read_images_batch(images)
             self.bin_images = self.vertical_bin_all_images(bin_power)
+            self.stark_maps = self.generate_stark_maps()
+            self.stark_maps_baselined = self.baseline_stark_maps()
         else:
             self.raw_images = None
             print(f'ERROR: "{images}" is not a path. Provide valid path to npz file with images.')
@@ -158,6 +162,22 @@ class StarkMapGenerator():
         y = np.linspace(0,self.fov[1],ny)
         return time, x, y
     
+    def _baseline_stark_map(self, image):
+        im_out = np.copy(image.T)
+        print(im_out.shape)
+        for i,c in enumerate(image.T):
+            baseline_fitter = Baseline(x_data=np.arange(c.shape[0]))
+            bkg, _ = baseline_fitter.asls(c, lam=1e5, p=0.1)
+            im_out[i] = c - bkg
+        return im_out.T
+    
+    def baseline_stark_maps(self):
+        baselined_batch = np.copy(self.stark_maps)
+        for i,smap in enumerate(self.stark_maps):
+            baselined_batch[i] = self._baseline_stark_map(smap)
+        return baselined_batch 
+
+    
 
 # %%
 if __name__ == '__main__':
@@ -165,17 +185,16 @@ if __name__ == '__main__':
     # can be deleted with no harm 
     mpl.style.use('custom-style')
 
-    path = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-08-07\\data\\data-imgs-2-2025-08-07.npz'
-    sm = StarkMapGenerator(path, bin_power=6)
+    path = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-08-07\\data\\data-imgs-3-2025-08-07.npz'
+    sm = StarkMapsGenerator(path, bin_power=5)
     sm.plot_batch_imgs(binned=True)
 # %%
-    stark_maps = sm.generate_stark_maps()[2:]
+    stark_maps = sm.baseline_stark_maps()[4:]
 # %%
     nspec, ny, nx = stark_maps.shape
     fig, ax = plt.subplots(nrows=nspec, 
                            figsize=(3,8),
-                           sharex=True,
-                           dpi=300)
+                           sharex=True)
     flat_stark_maps = stark_maps.flatten()
     glob_max = np.max(flat_stark_maps)
     glob_min = np.min(flat_stark_maps)
@@ -191,7 +210,7 @@ if __name__ == '__main__':
                   x=-0.03)
 # %%
     from skimage.restoration import denoise_wavelet, denoise_bilateral, denoise_nl_means, denoise_tv_bregman,denoise_tv_chambolle
-    smap_select = stark_maps[4]
+    smap_select = stark_maps[9]
 
     methods_str = ['Original',
                    'Wavelet',
@@ -228,4 +247,10 @@ if __name__ == '__main__':
         ax[1].plot(denoise_wavelet[:,i])
         ax[2].plot(denoise_bilat[:,i], 'o-', alpha=0.4)
 
+# %%
+    sm.save_sark_map_batch('./maps.npz')
+
+# %%
+    df = np.load('./maps.npz')
+    print(df.files)
 # %%
