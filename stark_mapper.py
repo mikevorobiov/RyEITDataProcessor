@@ -177,6 +177,16 @@ class StarkMapsGenerator():
             baselined_batch[i] = self._baseline_stark_map(smap)
         return baselined_batch 
 
+    def save_sark_map_batch(self, path, option='baselined'):
+        time, x, y, = self.get_time_distance()
+        save_dict = {'time(s)': time,
+                     'HorzDistance(mm)': x,
+                     'VertDistance(mm)': y,
+                     'SMaps(EITperc)': self.stark_maps_baselined}
+        if option == 'baselined':
+            np.savez(path, **save_dict)
+        else:
+            print('ERROR: Wrong option for save!')
     
 
 # %%
