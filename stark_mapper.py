@@ -9,13 +9,15 @@ import os
 #%%
 class StarkMapGenerator():
     def __init__(self, images, 
-                 fps_hz=13.68, 
+                 fps_hz=13.68, # Hz
+                 laser_sweep=0.1, # Hz
                  fov_mm=(10.8,7.2), 
                  camera_resolution=(1536,1024),
                  bin_power=2
                  ):
         
         self.fps = fps_hz # FPS in Hz
+        self.laser_sweep = laser_sweep # Hz
         self.fov = fov_mm # field of view (horiz, vert) in mm
         self.resolution_full = camera_resolution # Full camera resolution
         if isinstance(images, str):
@@ -148,21 +150,82 @@ class StarkMapGenerator():
 
         return stark_maps
     
+    def get_time_distance(self):
+        n_frames, ny, nx = self.bin_images.shape
+        time_stop = n_frames/self.fps
+        time = np.linspace(0,time_stop,n_frames)
+        x = np.linspace(0,self.fov[0],nx)
+        y = np.linspace(0,self.fov[1],ny)
+        return time, x, y
+    
 
 # %%
 if __name__ == '__main__':
+    # Custom matpltotlib style 
+    # can be deleted with no harm 
+    mpl.style.use('custom-style')
+
     path = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-08-07\\data\\data-imgs-2-2025-08-07.npz'
     sm = StarkMapGenerator(path, bin_power=6)
     sm.plot_batch_imgs(binned=True)
-    stark_maps = sm.generate_stark_maps()
+# %%
+    stark_maps = sm.generate_stark_maps()[2:]
 # %%
     nspec, ny, nx = stark_maps.shape
-    fig, ax = plt.subplots(nrows=nspec, figsize=(3,7))
+    fig, ax = plt.subplots(nrows=nspec, 
+                           figsize=(3,8),
+                           sharex=True,
+                           dpi=300)
     flat_stark_maps = stark_maps.flatten()
     glob_max = np.max(flat_stark_maps)
     glob_min = np.min(flat_stark_maps)
+    time, x, y = sm.get_time_distance()
     for a,s in zip(ax, stark_maps):
-        a.pcolormesh(s, cmap='inferno', 
+        a.pcolormesh(x, time, s, 
+                     cmap='inferno', 
                      vmin=glob_min,
                      vmax=glob_max)
+    fig.supxlabel('Distance (mm)',
+                  y=0.05)
+    fig.supylabel('Frequency (seconds)',
+                  x=-0.03)
+# %%
+    from skimage.restoration import denoise_wavelet, denoise_bilateral, denoise_nl_means, denoise_tv_bregman,denoise_tv_chambolle
+    smap_select = stark_maps[4]
+
+    methods_str = ['Original',
+                   'Wavelet',
+                   'Bilateral']
+    denoise_wavelet = denoise_wavelet(smap_select, 
+                                      method='BayesShrink',
+                                      mode='hard',
+                                      sigma=0.5)
+    denoise_bilat = denoise_bilateral(smap_select,
+                                      win_size=3,
+                                      mode='wrap')
+    denoise_nlmeans = denoise_nl_means(smap_select, patch_size=50)
+    denoise_tv_bregman = denoise_tv_bregman(smap_select,isotropic=False)
+    denoise_tv_chambolle = denoise_tv_chambolle(smap_select)
+
+    fig, ax = plt.subplots(2,3,figsize=(10,3))
+    ax[0,0].pcolormesh(smap_select, cmap='inferno')
+    ax[0,0].set_title(methods_str[0])
+    ax[0,1].pcolormesh(denoise_wavelet, cmap='inferno')
+    ax[0,1].set_title(methods_str[1])
+    ax[0,2].pcolormesh(denoise_bilat, cmap='inferno')
+    ax[0,2].set_title(methods_str[2])
+    ax[1,0].pcolormesh(denoise_nlmeans, cmap='inferno')
+    # ax[1,0].set_title(methods_str[0])
+    ax[1,1].pcolormesh(denoise_tv_bregman, cmap='inferno')
+    # ax[1,1].set_title(methods_str[1])
+    ax[1,2].pcolormesh(denoise_tv_chambolle, cmap='inferno')
+    # ax[1,2].set_title(methods_str[2])
+
+    fig, ax = plt.subplots(3,1, figsize=(4,10))
+    n_slices = 350
+    for i in range(0,nx,n_slices):
+        ax[0].plot(smap_select[:,i])
+        ax[1].plot(denoise_wavelet[:,i])
+        ax[2].plot(denoise_bilat[:,i], 'o-', alpha=0.4)
+
 # %%
