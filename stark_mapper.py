@@ -4,6 +4,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 
 from pybaselines import Baseline
+from skimage.restoration import denoise_bilateral
 
 import os
 
@@ -27,6 +28,7 @@ class StarkMapsGenerator():
             self.bin_images = self.vertical_bin_all_images(bin_power)
             self.stark_maps = self.generate_stark_maps()
             self.stark_maps_baselined = self.baseline_stark_maps()
+            self.stark_maps_filtered = self.filter_stark_maps()
         else:
             self.raw_images = None
             print(f'ERROR: "{images}" is not a path. Provide valid path to npz file with images.')
@@ -175,14 +177,23 @@ class StarkMapsGenerator():
         baselined_batch = np.copy(self.stark_maps)
         for i,smap in enumerate(self.stark_maps):
             baselined_batch[i] = self._baseline_stark_map(smap)
-        return baselined_batch 
+        return baselined_batch
+    
+    def filter_stark_maps(self, win_size=3, mode='wrap'):
+        filtered_stark_maps = np.copy(self.stark_maps_baselined)
+        for j, bimg in enumerate(self.stark_maps_baselined):
+            filtered_stark_maps[j] = denoise_bilateral(bimg,win_size=win_size,mode=mode)
+        return filtered_stark_maps
+    
+    def get_stark_maps(self):
+        return self.stark_maps_filtered
 
     def save_sark_map_batch(self, path, option='baselined'):
         time, x, y, = self.get_time_distance()
         save_dict = {'time(s)': time,
                      'HorzDistance(mm)': x,
                      'VertDistance(mm)': y,
-                     'SMaps(EITperc)': self.stark_maps_baselined}
+                     'SMaps(EITperc)': self.stark_maps_filtered}
         if option == 'baselined':
             np.savez(path, **save_dict)
         else:
@@ -195,11 +206,11 @@ if __name__ == '__main__':
     # can be deleted with no harm 
     mpl.style.use('custom-style')
 
-    path = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-08-07\\data\\data-imgs-3-2025-08-07.npz'
+    path = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-08-07\\data\\data-imgs-2-2025-08-07.npz'
     sm = StarkMapsGenerator(path, bin_power=5)
     sm.plot_batch_imgs(binned=True)
 # %%
-    stark_maps = sm.baseline_stark_maps()[4:]
+    stark_maps = sm.get_stark_maps()[4:-3]
 # %%
     nspec, ny, nx = stark_maps.shape
     fig, ax = plt.subplots(nrows=nspec, 
@@ -218,44 +229,6 @@ if __name__ == '__main__':
                   y=0.05)
     fig.supylabel('Frequency (seconds)',
                   x=-0.03)
-# %%
-    from skimage.restoration import denoise_wavelet, denoise_bilateral, denoise_nl_means, denoise_tv_bregman,denoise_tv_chambolle
-    smap_select = stark_maps[9]
-
-    methods_str = ['Original',
-                   'Wavelet',
-                   'Bilateral']
-    denoise_wavelet = denoise_wavelet(smap_select, 
-                                      method='BayesShrink',
-                                      mode='hard',
-                                      sigma=0.5)
-    denoise_bilat = denoise_bilateral(smap_select,
-                                      win_size=3,
-                                      mode='wrap')
-    denoise_nlmeans = denoise_nl_means(smap_select, patch_size=50)
-    denoise_tv_bregman = denoise_tv_bregman(smap_select,isotropic=False)
-    denoise_tv_chambolle = denoise_tv_chambolle(smap_select)
-
-    fig, ax = plt.subplots(2,3,figsize=(10,3))
-    ax[0,0].pcolormesh(smap_select, cmap='inferno')
-    ax[0,0].set_title(methods_str[0])
-    ax[0,1].pcolormesh(denoise_wavelet, cmap='inferno')
-    ax[0,1].set_title(methods_str[1])
-    ax[0,2].pcolormesh(denoise_bilat, cmap='inferno')
-    ax[0,2].set_title(methods_str[2])
-    ax[1,0].pcolormesh(denoise_nlmeans, cmap='inferno')
-    # ax[1,0].set_title(methods_str[0])
-    ax[1,1].pcolormesh(denoise_tv_bregman, cmap='inferno')
-    # ax[1,1].set_title(methods_str[1])
-    ax[1,2].pcolormesh(denoise_tv_chambolle, cmap='inferno')
-    # ax[1,2].set_title(methods_str[2])
-
-    fig, ax = plt.subplots(3,1, figsize=(4,10))
-    n_slices = 350
-    for i in range(0,nx,n_slices):
-        ax[0].plot(smap_select[:,i])
-        ax[1].plot(denoise_wavelet[:,i])
-        ax[2].plot(denoise_bilat[:,i], 'o-', alpha=0.4)
 
 # %%
     sm.save_sark_map_batch('./maps.npz')
