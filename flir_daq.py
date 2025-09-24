@@ -51,6 +51,10 @@ class FLIRdaq():
         self.acquisition_time = None
 
         self.full_resolution = full_resolution
+        self.full_horizontal_resolution = full_resolution[0]
+        self.full_vertical_resolution = full_resolution[1]
+
+
         self.field_of_view_mm = field_of_view_mm
         self.aspect_ratio = aspect_ratio
         self.horizontal_distance = field_of_view_mm
@@ -121,6 +125,26 @@ class FLIRdaq():
         file = np.load(file_path)
         output_dict = {key: file[key] for key in file.files}
         return output_dict
+    
+    def init_from_npz(self, file_path: str) -> None:
+        data_dict = self.read_npz(file_path)
+
+        self.file_id = data_dict['file_id']
+        self.camera_model = data_dict['camera_model']
+        self.number_of_frames = data_dict['number_of_frames']
+        self.time_stop = data_dict['time_stop']
+        self.fps_hz = data_dict['fps_hz']
+        self.blue_laser_sweep_hz = data_dict['blue_laser_sweep_hz']
+        self.acquisition_time = data_dict['acquisition_time_sec']
+        self.full_resolution = data_dict['camera_full_resolution']
+        self.vertical_distance = data_dict['vertical_mm']
+        self.horizontal_distance = data_dict['horizontal_mm']
+        self.reference_signal = data_dict['reference_signals_volt']
+        self.images_stack = data_dict['images_stack'].T
+        self.comments = data_dict['comments']
+
+        self.full_horizontal_resolution = self.full_resolution[0]
+        self.full_vertical_resolution = self.full_resolution[1]
 
     def get_data_dict(self):
         # Before saving we would like to make the array such 
@@ -147,8 +171,22 @@ class FLIRdaq():
         }
         return output_dict
     
-    def _save_hdf5(self, file_path):
-        raise NotImplemented
+    def save_hdf5(self, file_path: str, file_access='w') -> None:
+        data_dict = self.get_data_dict()
+        data_keys = ['images_stack','reference_signals_volt', 'camera_full_resolution', 'comments', 'file_id', 'camera_model']
+        with h5py.File(file_path, file_access) as f:
+
+            imgs_set = f.create_dataset('/raw_data/images_stack', data_dict['images_stack'].shape, dtype='f', compression="gzip")
+            ref_set = f.create_dataset('/raw_data/reference_signals_volt', data_dict['reference_signals_volt'].shape, dtype='f', compression="gzip")
+            
+            imgs_set[...] = data_dict['images_stack']
+            ref_set[...] = data_dict['reference_signals_volt']
+
+            for key in data_dict:
+                print(key)
+                if key not in data_keys:
+                    imgs_set.attrs[key] = data_dict[key]
+
 
     def save_images(self, 
                     file_path:str
