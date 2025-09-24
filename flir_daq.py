@@ -26,6 +26,8 @@ import time
 import pyperclip as pyp
 import re
 
+import h5py
+
 
 class FLIRdaq():
     
@@ -114,6 +116,12 @@ class FLIRdaq():
         print(f'[{datetime.now()}] Reference traces retrieved.')
         self.reference_signal = traces_data
 
+    @classmethod
+    def read_npz(self, file_path):
+        file = np.load(file_path)
+        output_dict = {key: file[key] for key in file.files}
+        return output_dict
+
     def get_data_dict(self):
         # Before saving we would like to make the array such 
         # that 
@@ -138,6 +146,9 @@ class FLIRdaq():
             'comments': self.comments
         }
         return output_dict
+    
+    def _save_hdf5(self, file_path):
+        raise NotImplemented
 
     def save_images(self, 
                     file_path:str
