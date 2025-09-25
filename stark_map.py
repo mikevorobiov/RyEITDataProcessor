@@ -275,6 +275,30 @@ class StarkMap:
         except Exception as e:
             print(f"Error saving file: {e}")
             return False
+    
+    @classmethod
+    def from_hdf5(cls, file_path: str):
+        if not os.path.exists(file_path):
+            print(f"Error: File not found at '{file_path}'.")
+            return None
+        try:
+            with h5py.File(file_path, 'r') as f:
+                 print("Keys in the file:", list(f.keys()))
+                 print(f['/stark_map'].shape)
+                 map_data = np.array(f['/stark_map'])
+                 freq_mhz = np.array(f['/frequency_mhz'])
+                 dist_mm = np.array(f['/distance_mm'])
+                 file_id = f['/stark_map'].attrs['image_stack']
+            
+            new_map = cls(file_id=file_id,
+                          map_data=map_data,
+                          frequency_mhz=freq_mhz, 
+                          distance_mm=dist_mm
+                          )
+            return new_map
+        except Exception as e:
+            print(f"Error initializing map from file: {e}")
+            return None
 
     @classmethod
     def load(cls, file_path: str):
