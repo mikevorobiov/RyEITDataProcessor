@@ -9,6 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import datetime as dt
+import h5py
 #%%
 class StarkMap:
     """
@@ -191,6 +192,7 @@ class StarkMap:
         Returns:
             bool: True if save was successful, False otherwise.
         """
+
         if self.map is None:
             print("Warning: No Stark map data assigned. Cannot save.")
             return False
@@ -204,6 +206,70 @@ class StarkMap:
                 "distance_mm": self.distance_mm
             }
             np.savez_compressed(file_path, **data_dict)
+            print(f"Stark map saved successfully to '{file_path}'.")
+            return True
+        except Exception as e:
+            print(f"Error saving file: {e}")
+            return False
+        
+    def save_hdf5(self, 
+                  file_path: str, 
+                  file_mode='w',
+                  compression='gzip') -> bool:
+        """
+        Saves the Stark map and its metadata to an HDF5 file (.hdf).
+
+        Args:
+            file_path (str): The path to save the file to.
+            file_access (str): The file mode (can be 'r', 'r+', 'w', 'x' or 'a'; see h5py docs for details)
+
+        Returns:
+            bool: True if save was successful, False otherwise.
+        """
+        if self.map is None:
+            print("Warning: No Stark map data assigned. Cannot save.")
+            return False
+            
+        try:
+            # Open file for writing
+            with h5py.File(file_path, file_mode) as f:
+                # 1 Create dataset for Stark map
+                smap_set = f.create_dataset("stark_map", 
+                                            self.map.shape, 
+                                            dtype='f',
+                                            compression=compression)
+                # Name of the image stack file 
+                # from which the map had been created
+                smap_set.attrs['image_stack'] = self.file_id
+
+                # 2 Create dataset for frequency detuning samples
+                freq_set = f.create_dataset("frequency_mhz", 
+                                            self.frequency_mhz.shape, 
+                                            dtype='f',
+                                            compression=compression)
+                freq_set.make_scale('Detuning') #Make the dataset a scale
+                freq_set.attrs['units'] = 'MHz' #Associate units (MHz)
+
+                # 3 Create dataset for position along laser beam samples
+                dist_set = f.create_dataset("distance_mm", 
+                                            self.distance_mm.shape, 
+                                            dtype='f',
+                                            compression=compression)
+                dist_set.make_scale('Position') #Make the dataset a scale
+                dist_set.attrs['units'] = 'mm' #Associate units (millimeters)
+                
+                # 4 Associate scale datasets with their 
+                #   respective Stark map dimensions
+                f['stark_map'].dims[0].attach_scale(freq_set)
+                f['stark_map'].dims[1].attach_scale(dist_set)
+
+                # 5 Populate datasets in the file with the 
+                #   current class fields data
+                smap_set[...] = self.map
+                freq_set[...] = self.frequency_mhz
+                dist_set[...] = self.distance_mm
+
+
             print(f"Stark map saved successfully to '{file_path}'.")
             return True
         except Exception as e:

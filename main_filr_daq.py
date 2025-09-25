@@ -148,3 +148,5 @@ else:
     smc.save_images(os.path.join(dir_path, fname_images))
     smap_corrected.save(os.path.join(dir_path, fname_smap))
 # %%
+
+sss_map = smap.get_map_data()
