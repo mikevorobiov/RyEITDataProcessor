@@ -221,7 +221,7 @@ class StarkMap:
 
         Args:
             file_path (str): The path to save the file to.
-            file_access (str): The file mode (can be 'r', 'r+', 'w', 'x' or 'a'; see h5py docs for details)
+            file_access (str): The file mode (can be 'w' or 'x'; see h5py docs for details)
             compression (str): Specifies compression filter used by the `h5py` module.
 
         Returns:
