@@ -222,6 +222,7 @@ class StarkMap:
         Args:
             file_path (str): The path to save the file to.
             file_access (str): The file mode (can be 'r', 'r+', 'w', 'x' or 'a'; see h5py docs for details)
+            compression (str): Specifies compression filter used by the `h5py` module.
 
         Returns:
             bool: True if save was successful, False otherwise.
@@ -278,13 +279,20 @@ class StarkMap:
     
     @classmethod
     def from_hdf5(cls, file_path: str):
+        '''
+        Create stark map from an .hdf5 file.
+        Args:
+            file_path (str): The path to the file containing Stark map.
+
+        Returns:
+            StarkMap: Returns read data as StarkMap class instance.
+            None: Returns None if failed to read the file.
+        '''
         if not os.path.exists(file_path):
             print(f"Error: File not found at '{file_path}'.")
             return None
         try:
             with h5py.File(file_path, 'r') as f:
-                 print("Keys in the file:", list(f.keys()))
-                 print(f['/stark_map'].shape)
                  map_data = np.array(f['/stark_map'])
                  freq_mhz = np.array(f['/frequency_mhz'])
                  dist_mm = np.array(f['/distance_mm'])
@@ -301,7 +309,7 @@ class StarkMap:
             return None
 
     @classmethod
-    def load(cls, file_path: str):
+    def load_npz(cls, file_path: str):
         if not os.path.exists(file_path):
             print(f"Error: File not found at '{file_path}'.")
             return None
