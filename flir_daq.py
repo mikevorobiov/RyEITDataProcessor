@@ -63,7 +63,9 @@ class FLIRdaq():
 
         self.images_stack = None
         self.reference_signal = None
-        self.reference_time = None
+        self.scope_trigger = None
+        self.scope_eit_reference = None
+        self.scope_time = None
 
         self.comments = []
 
@@ -108,7 +110,9 @@ class FLIRdaq():
 
     def acquire_reference_trace(self,
                                 scope_visa_resource,
-                                n_pts_request = 4000
+                                n_pts_request: int = 4000,
+                                reference_channel: int = 1,
+                                trigger_channel: int = 4
                                 ):
         '''
         'scope1': 'TCPIP0::192.168.110.191::inst0::INSTR',
@@ -119,6 +123,10 @@ class FLIRdaq():
         traces_data = traces.getData().T # Transpose data for usability
         print(f'[{datetime.now()}] Reference traces retrieved.')
         self.reference_signal = traces_data
+
+        self.scope_time = traces_data[0]
+        self.scope_eit_reference = traces_data[reference_channel]
+        self.scope_trigger = traces_data[trigger_channel]
 
     @classmethod
     def read_npz(self, file_path):
@@ -167,20 +175,61 @@ class FLIRdaq():
             'horizontal_mm': np.round(self.horizontal_distance,2),
             'reference_signals_volt': self.reference_signal,
             'images_stack': images_transposed,
-            'comments': self.comments
+            'comments': self.comments,
+            'scope_eit_reference': self.scope_eit_reference,
+            'scope_trigger': self.scope_trigger,
+            'scope_time': self.scope_time
         }
         return output_dict
     
-    def save_hdf5(self, file_path: str, file_access='w') -> None:
-        data_dict = self.get_data_dict()
-        data_keys = ['images_stack','reference_signals_volt', 'camera_full_resolution', 'comments', 'file_id', 'camera_model']
-        with h5py.File(file_path, file_access) as f:
+    def save_hdf5(self, file_path: str, 
+                  file_access: str='w',
+                  compression: str='gzip') -> None:
+        '''
+        Save stack of images and scope reference traces into an HDF5 file.
+        Reference traces are the reference cell EIT signal and the trigger signal
 
-            imgs_set = f.create_dataset('/raw_data/images_stack', data_dict['images_stack'].shape, dtype='f', compression="gzip")
-            ref_set = f.create_dataset('/raw_data/reference_signals_volt', data_dict['reference_signals_volt'].shape, dtype='f', compression="gzip")
-            
+        Args:
+            file_path (str): File saving path.
+            file_access (str): File mode (can be 'r', 'r+', 'w', 'x' or 'a'; see h5py docs for details)
+            compression (str): Specifies compression filter used by the `h5py` module.
+        Returns:
+            None: 
+        '''
+
+        data_dict = self.get_data_dict()
+        data_keys = ['images_stack',\
+                     'reference_signals_volt',\
+                     'scope_eit_reference', 'scope_trigger', 'scope_time',\
+                     'comments']
+        
+        with h5py.File(file_path, file_access) as f:
+           
+            imgs_set = f.create_dataset('image_stack', 
+                                        data_dict['images_stack'].shape, 
+                                        dtype=np.uint16, compression=compression)
+            imgs_set.dims[0].label = 'f'
+            imgs_set.dims[1].label = 'x'
+            imgs_set.dims[2].label = 'y'
             imgs_set[...] = data_dict['images_stack']
-            ref_set[...] = data_dict['reference_signals_volt']
+
+            scope_eit_set = f.create_dataset('scope_eit_reference', 
+                                             data_dict['scope_eit_reference'].shape, 
+                                             dtype='f', compression=compression)
+            scope_eit_set.attrs['units'] = 'V'
+            scope_eit_set[...] = data_dict['scope_eit_reference']
+
+            scope_trig_set = f.create_dataset('scope_trigger', 
+                                              data_dict['scope_trigger'].shape, 
+                                              dtype='f', compression=compression)
+            scope_trig_set.attrs['units'] = 'V'
+            scope_trig_set[...] = data_dict['scope_trigger']
+
+            scope_time = f.create_dataset('scope_time', 
+                                          len(data_dict['scope_time']), 
+                                          dtype='f', compression=compression)
+            scope_time.attrs['units'] = 's'
+            scope_time[...] = data_dict['scope_time']
 
             for key in data_dict:
                 print(key)
