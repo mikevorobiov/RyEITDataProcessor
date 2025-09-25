@@ -52,13 +52,14 @@ daq = FLIRdaq(blue_laser_sweep_hz=0.02,
               fps_hz=14.67,
               full_resolution=(1536,1024),
               file_id=fname_images) 
-daq.acquire_frames(camera_index=1) # request frames from camera
+daq.acquire_frames(camera_index=0) # request frames from camera
 daq.acquire_reference_trace(scope_visa_resource=scope) # get the EIT reference trace
 daq.add_comment('PINQUED project...') # Add comment to the image batch
 daq.print_info() # Print information on the data just taken
 
 daq_dict = daq.get_data_dict() # Store daq results in a dictionary
-
+#%%
+daq.save_hdf5('test.h5')
 # %%
 # ----------- Frequency axis calibration ---------------
 # Create calibrator object and initialze it with DAQ data dictionary
