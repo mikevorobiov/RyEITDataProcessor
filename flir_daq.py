@@ -27,6 +27,7 @@ import pyperclip as pyp
 import re
 
 import h5py
+from typing import Literal
 
 
 class FLIRdaq():
@@ -182,59 +183,85 @@ class FLIRdaq():
         }
         return output_dict
     
-    def save_hdf5(self, file_path: str, 
-                  file_access: str='w',
-                  compression: str='gzip') -> None:
+    def save_hdf5(self, file_path: str,
+                  file_access: Literal['w', 'x'] = 'w',
+                  compression: str = 'gzip') -> None:
         '''
         Save stack of images and scope reference traces into an HDF5 file.
-        Reference traces are the reference cell EIT signal and the trigger signal
 
         Args:
             file_path (str): File saving path.
-            file_access (str): File mode (can be 'r', 'r+', 'w', 'x' or 'a'; see h5py docs for details)
-            compression (str): Specifies compression filter used by the `h5py` module.
+            file_access (Literal['w', 'x']): File mode.
+            compression (str): Compression filter ('gzip', 'lzf', etc.).
         Returns:
-            None: 
+            None:
         '''
-
+        # 1. Retrieve all acquired data from the class instance.
+        #    Assumes self.get_data_dict() returns a dictionary of data and metadata.
         data_dict = self.get_data_dict()
-        data_keys = ['images_stack',\
-                     'reference_signals_volt',\
-                     'scope_eit_reference', 'scope_trigger', 'scope_time',\
-                     'comments']
-        
-        with h5py.File(file_path, file_access) as f:
-           
-            imgs_set = f.create_dataset('image_stack', 
-                                        data_dict['images_stack'].shape, 
-                                        dtype=np.uint16, compression=compression)
-            imgs_set.dims[0].label = 'f'
-            imgs_set.dims[1].label = 'x'
-            imgs_set.dims[2].label = 'y'
-            imgs_set[...] = data_dict['images_stack']
 
-            scope_eit_set = f.create_dataset('scope_eit_reference', 
-                                             data_dict['scope_eit_reference'].shape, 
-                                             dtype='f', compression=compression)
-            scope_eit_set.attrs['units'] = 'V'
-            scope_eit_set[...] = data_dict['scope_eit_reference']
+        # --- Configuration for datasets ---
+        # Defines (name, data_key, dtype, units, labels) for datasets to be created.
+        DATASET_CONFIG = [
+            ('image_stack', 'images_stack', np.uint16, None, ('f', 'x', 'y')),
+            ('scope_eit_reference', 'scope_eit_reference', 'f', 'V', None),
+            ('scope_trigger', 'scope_trigger', 'f', 'V', None),
+            ('scope_time', 'scope_time', 'f', 's', None)
+        ]
 
-            scope_trig_set = f.create_dataset('scope_trigger', 
-                                              data_dict['scope_trigger'].shape, 
-                                              dtype='f', compression=compression)
-            scope_trig_set.attrs['units'] = 'V'
-            scope_trig_set[...] = data_dict['scope_trigger']
+        # --- Keys to exclude from being saved as attributes ---
+        # These are large data arrays, not small metadata parameters.
+        EXCLUDE_FROM_ATTRS = {
+            'images_stack', 'reference_signals_volt', 'scope_eit_reference',
+            'scope_trigger', 'scope_time', 'comments'
+        }
 
-            scope_time = f.create_dataset('scope_time', 
-                                          len(data_dict['scope_time']), 
-                                          dtype='f', compression=compression)
-            scope_time.attrs['units'] = 's'
-            scope_time[...] = data_dict['scope_time']
+        # 2. Open an .h5 file and write data.
+        try:
+            with h5py.File(file_path, file_access) as f:
+                # 2.1 Create and store all primary datasets.
+                main_image_set = None
+                for name, key, dtype, units, labels in DATASET_CONFIG:
+                    data = data_dict[key]
 
-            for key in data_dict:
-                print(key)
-                if key not in data_keys:
-                    imgs_set.attrs[key] = data_dict[key]
+                    # Use data.shape or len(data) depending on whether we need to specify a shape 
+                    # or just a size for a 1D array.
+                    shape = data.shape if hasattr(data, 'shape') else len(data)
+
+                    dset = f.create_dataset(
+                        name, 
+                        data=data,
+                        shape=shape, 
+                        dtype=dtype, 
+                        compression=compression
+                    )
+
+                    # Store the main image dataset reference for attribute assignment later
+                    if name == 'image_stack':
+                        main_image_set = dset
+
+                    # Assign units attribute
+                    if units:
+                        dset.attrs['units'] = units
+
+                    # Assign dimension labels for the image stack
+                    if labels and len(labels) == len(dset.dims):
+                        for i, label in enumerate(labels):
+                            dset.dims[i].label = label
+
+                # 2.2 Attach all remaining metadata (parameters) as attributes to the image stack.
+                if main_image_set is not None:
+                    for key, value in data_dict.items():
+                        if key not in EXCLUDE_FROM_ATTRS:
+                            # Attempt to convert to string if h5py can't handle the type
+                            try:
+                                main_image_set.attrs[key] = value
+                            except TypeError:
+                                print(f"Warning: Could not save attribute '{key}' of type {type(value)}. Saving as string.")
+                                main_image_set.attrs[key] = str(value)
+        except Exception as e:
+            print(f"Error saving HDF5 file: {e}")
+            raise
 
 
     def save_images(self, 
