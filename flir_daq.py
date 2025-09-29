@@ -246,7 +246,7 @@ class FLIRdaq():
         self.vertical_distance_mm = float(data_dict.get('vertical_mm', self.vertical_distance_mm))
         self.horizontal_distance_mm = float(data_dict.get('horizontal_mm', self.horizontal_distance_mm))
         self.reference_signal = data_dict.get('reference_signals_volt')
-        self.image_stack = data_dict.get('images_stack') 
+        self.image_stack = data_dict.get('image_stack') 
         self.comments = list(data_dict.get('comments', []))
         
         self.scope_time = data_dict.get('scope_time')
