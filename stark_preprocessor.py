@@ -21,11 +21,11 @@ class StarkPreprocessor():
         
         self.data_dict = daq_dict
 
-        self.images_stack_original = daq_dict['images_stack']
-        self.images_stack_processed = daq_dict['images_stack'].copy()
+        self.image_stack_original = daq_dict['image_stack']
+        self.image_stack_processed = daq_dict['image_stack'].copy()
 
-        self.horizontal_dist_mm = np.linspace(0,daq_dict['horizontal_mm'],daq_dict['images_stack'].shape[1])
-        self.vertical_dist_mm = np.linspace(0,daq_dict['vertical_mm'],daq_dict['images_stack'].shape[2])
+        self.horizontal_dist_mm = np.linspace(0,daq_dict['horizontal_mm'],daq_dict['image_stack'].shape[1])
+        self.vertical_dist_mm = np.linspace(0,daq_dict['vertical_mm'],daq_dict['image_stack'].shape[2])
 
     def _apply_binning_to_trace(self, signal, bin_power):
         '''
@@ -35,9 +35,9 @@ class StarkPreprocessor():
         binned_signal = signal.reshape(-1, bin_size).mean(axis=1)
         return binned_signal
 
-    def vertical_binning(self, bin_power=1):       
+    def horizontal_binning(self, bin_power=1):       
         # Determine the map to use for processing
-        images_to_process = self.images_stack_original
+        images_to_process = self.image_stack_original
         
         images_binned = np.apply_along_axis(self._apply_binning_to_trace, 
                                          1, 
@@ -47,12 +47,12 @@ class StarkPreprocessor():
 
         # Add the new comment to the processed map
         self.data_dict['comments'].append(f'[{dt.date.today()}] Vertical binning: `2**{bin_power}`')
-        self.images_stack_processed = images_binned
-        return self.images_stack_processed
+        self.image_stack_processed = images_binned
+        return self.image_stack_processed
     
-    def horizontal_binning(self, bin_power=1):       
+    def vertical_binning(self, bin_power=1):       
         # Determine the map to use for processing
-        images_to_process = self.images_stack_original
+        images_to_process = self.image_stack_original
         
         images_binned = np.apply_along_axis(self._apply_binning_to_trace, 
                                          2, 
@@ -61,20 +61,20 @@ class StarkPreprocessor():
         
         # Add the new comment to the processed map
         self.data_dict['comments'].append(f'[{dt.date.today()}] Vertical binning: `2**{bin_power}`')
-        self.images_stack_processed = images_binned
-        return self.images_stack_processed
+        self.image_stack_processed = images_binned
+        return self.image_stack_processed
     
     def detect_overexposed(self, roi:int=-1):
-        images_to_process = self.images_stack_processed
+        images_to_process = self.image_stack_processed
         nx, _, _ = images_to_process.shape
         medians = np.mean(images_to_process[:,:,:roi].reshape(nx, -1),axis=1)
         medians_divisor = medians[:, np.newaxis, np.newaxis]/medians.mean()
-        self.images_stack_processed = images_to_process/medians_divisor
+        self.image_stack_processed = images_to_process/medians_divisor
         return medians
 
     def get_single_stark_map(self):
-        n_freq, _, _ = self.images_stack_processed.shape
-        vertical_mean = self.images_stack_processed.mean(axis=2)
+        n_freq, _, _ = self.image_stack_processed.shape
+        vertical_mean = self.image_stack_processed.mean(axis=2)
         ones_mat = np.ones(vertical_mean.shape)
         base_intensity_trace = vertical_mean[0,:]
         base_intensity = np.repeat(base_intensity_trace[np.newaxis,:], 
