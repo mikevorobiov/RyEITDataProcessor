@@ -104,11 +104,12 @@ if not logger.handlers:
 #    INITIALIZE EQUIPMENT
 address_dict = {
     'scope2': ('SDS800XHD', 'TCPIP0::192.168.110.198::inst0::INSTR'),
-    'Grid Current (A)': ('HP3457A', 'visa://192.168.194.15/GPIB1::22::INSTR'),
-    'Anode Current (A)': ('HP_34401', 'visa://192.168.194.15/ASRL12::INSTR'),
-    'Chamber Current (A)': ('BK_5491', 'visa://192.168.194.15/ASRL9::INSTR'),
-    'Pressure (Torr)': ('MKS390', 'visa://192.168.194.15/ASRL13::INSTR'),
+    'Grid Current': ('HP3457A', 'visa://192.168.194.15/GPIB1::22::INSTR'),
+    'Anode Current': ('HP_34401', 'visa://192.168.194.15/ASRL12::INSTR'),
+    'Chamber Current': ('BK_5491', 'visa://192.168.194.15/ASRL9::INSTR'),
+    'Pressure': ('MKS390', 'visa://192.168.194.15/ASRL13::INSTR'),
     'Anode Source': ('PSW25045', 'visa://192.168.194.15/ASRL10::INSTR'),
+    'Filaments Bias': ('GPP3610H', 'visa://192.168.194.15/ASRL11::INSTR'),
     'Heating': ('KeysightE36231A', 'visa://192.168.194.15/USB0::0x2A8D::0x2F02::MY61003701::INSTR'),
 }
 plasma_setup = HardwareManager(address_dict)
@@ -127,7 +128,7 @@ daq.acquire_frames(camera_index=0)
 daq.acquire_reference_trace(instruments['scope2'])
 # Get plasma auxillary parameters like pressure, currents and voltages
 plasma_state_dict = plasma_setup.get_readings()
-plasma_state_dict["Timestamp"] = dt.datetime.now().time()
+plasma_state_dict["Timestamp"] = dt.datetime.now().time().strftime('%H:%M:%S.%f')
 daq.print_info()
 
 
@@ -178,16 +179,10 @@ fig_map, ax_map = smap.plot() # plot stark map
 
 
 
-
-
-
-
-
-
 # %%
 # -------------- Save DATA -----------------
 # Create the 'data' directory if it doesn't exist
-working_dir = './'
+working_dir = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-09-30'
 date = dt.datetime.now().date() 
 data_labels = ['imgs', 'smap', 'params']
 saving_dir = os.path.join(working_dir, 'data')
@@ -198,8 +193,9 @@ file_daq_path, index = increment_filename_index(os.path.join(saving_dir, f'data-
 file_smap_path = os.path.join(saving_dir, f'data-smap-{date}_{index}.h5')
 file_plot_path = os.path.join(saving_dir, f'plot-smap-{date}_{index}.png')
 
-fig_map.savefig(file_plot_path)
+smap.set_file_id(os.path.basename(file_daq_path))
 smap.save_hdf5(file_smap_path)
+fig_map.savefig(file_plot_path)
 daq.save_hdf5(file_daq_path)
 
 df = pd.DataFrame()
