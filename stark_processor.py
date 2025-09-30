@@ -211,7 +211,7 @@ if __name__ == "__main__":
     if raw_map:
         # --- Step 2: Initialize the processor with the raw map ---
         print("\n--- 2. Initializing the StarkMapProcessor with the raw map ---")
-        processor = StarkMapProcessor(raw_map)
+        processor = StarkProcessor(raw_map)
         
         # --- Step 3: Use the processor to generate a new processed map ---
         print("\n--- 3. Applying baseline correction and creating a new map ---")
