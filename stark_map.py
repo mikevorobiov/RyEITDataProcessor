@@ -36,7 +36,7 @@ class StarkMap:
         """
         self.file_id = file_id
         self.comments = comments if comments else []
-        self.parameters = {}
+        self.attributes = {}
         
         # Initialize data fields, checking for provided values
         if map_data is not None and frequency_mhz is not None and distance_mm is not None:
@@ -93,7 +93,7 @@ class StarkMap:
 
     def get_spectrum(self, target_distance: float = 0.0) -> tuple[np.ndarray | None, np.ndarray | None]:
         """
-        Gets the Stark spectrum at the closest distance to the target.
+        Gets the Stark spectrum at the closest distance to the target position.
 
         Args:
             target_distance (float): The desired distance to get the spectrum from (in mm).
