@@ -49,10 +49,10 @@ class HardwareManager():
         for key, visa_resource in self.visa_resources_dict.items():
             if hasattr(visa_resource, 'getAdc'):
                 value = visa_resource.getAdc()
-                readings_dict[key] = value
+                readings_dict[key+' (A)'] = value
             elif hasattr(visa_resource, 'get_pressure'):
                 value = visa_resource.get_pressure()
-                readings_dict[key] = value
+                readings_dict[key+' (Torr)'] = value
             elif hasattr(visa_resource, 'get_out_current') and hasattr(visa_resource, 'get_out_voltage'):
                 value_voltage = visa_resource.get_out_voltage()
                 value_current = visa_resource.get_out_current()
