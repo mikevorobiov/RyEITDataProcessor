@@ -40,8 +40,8 @@ class StarkCalibrator():
         
         self.data_dict = daq_data_dict
 
-        self.time_stop = daq_data_dict['time_stop']
-        self.map_time = np.linspace(0, daq_data_dict['time_stop'], daq_data_dict['images_stack'].shape[0])
+        self.time_stop = daq_data_dict['time_stop_sec']
+        self.map_time = np.linspace(0, daq_data_dict['time_stop_sec'], daq_data_dict['image_stack'].shape[0])
         self.map_freq = None
 
 
