@@ -34,7 +34,6 @@ from typing import Literal, Dict, Any, Tuple, Optional
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 
-# Configure the logger for the module/class
 # 1. Retrieve the module logger. 
 #    This logger exists across all classes defined here.
 logger = logging.getLogger(__name__)
@@ -185,9 +184,9 @@ class FLIRdaq():
             self.logger.info(f'[{datetime.now()}] Reference traces retrieved.')
             
             self.reference_signal = traces_data
-            self.scope_time = traces_data[:, 0]
-            self.scope_eit_reference = traces_data[:, reference_channel]
-            self.scope_trigger = traces_data[:, trigger_channel]
+            self.scope_time = traces_data[0,:]
+            self.scope_eit_reference = traces_data[reference_channel,:]
+            self.scope_trigger = traces_data[trigger_channel,:]
             self.logger.info(f'Scope data successfully stored. Time points: {len(self.scope_time)}')
         except Exception as e:
             self.logger.error(f"Error during scope trace acquisition: {e}")
@@ -284,7 +283,7 @@ class FLIRdaq():
             'camera_full_resolution': self.full_resolution,
             'vertical_mm': np.round(self.vertical_distance_mm, 2),
             'horizontal_mm': np.round(self.horizontal_distance_mm, 2),
-            
+
             'image_stack': image_transposed,
             'reference_signals_volt': self.reference_signal,
             'scope_eit_reference': self.scope_eit_reference,
@@ -434,8 +433,7 @@ class FLIRdaq():
             # f'Actual FPS: {self.actual_fps_hz:.2f} Hz',
             f'Current FOV: {self.horizontal_distance_mm:.2f} x {self.vertical_distance_mm:.2f} mm',
             f'Images Stack Shape (Frame, Y, X): {img_shape}',
-            f'Reference Signal Shape: {ref_shape}',
-            'Comments:',
+            f'Reference Signal Shape: {ref_shape}'
         ]
         
         # 2. Add comments
