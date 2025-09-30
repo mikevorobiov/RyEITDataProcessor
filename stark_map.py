@@ -52,6 +52,9 @@ class StarkMap:
             self.frequency_mhz = None
             self.distance_mm = None
 
+    def set_file_id(self, original_file_name: str) -> None:
+        self.file_id = original_file_name
+
     def get_file_id(self) -> str | None:
         """Returns the original file identifier."""
         return self.file_id
