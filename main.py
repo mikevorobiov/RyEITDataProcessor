@@ -11,6 +11,7 @@ from stark_preprocessor import StarkPreprocessor
 import logging
 
 import pandas as pd
+import pyperclip as pyp
 
 #%%
 # DEFINE FUNCTIONS
@@ -87,7 +88,7 @@ def increment_filename_index(file_path: str) -> str:
 
 
 #%%
-# 1. -------------------------------------------------------------------
+# -------------- CONFIGURE LOGGER ----------------- 
 # Logging Configuration 
 # 1. Get the module logger
 logger = logging.getLogger() 
@@ -100,8 +101,7 @@ if not logger.handlers:
     logger.addHandler(ch)
 
 #%%
-# 2. -------------------------------------------------------------------
-#    INITIALIZE EQUIPMENT
+# -------------- INITIALIZE EQUIPMENT ----------------- 
 address_dict = {
     'scope2': ('SDS800XHD', 'TCPIP0::192.168.110.198::inst0::INSTR'),
     'Grid Current': ('HP3457A', 'visa://192.168.194.15/GPIB1::22::INSTR'),
@@ -117,8 +117,8 @@ instruments = plasma_setup.get_resources()
 
 
 #%%
-# 3. -----------------------------------------------------------------
-#    DATA ACQUISITION
+# -------------- DATA ACQUISITION -----------------
+#    
 # Create DAQ object for acquisition and initial pre-processing
 daq = FLIRdaq(blue_laser_sweep_hz=0.02,
               fps_hz=14.67,
@@ -126,18 +126,14 @@ daq = FLIRdaq(blue_laser_sweep_hz=0.02,
 # Since Camera is not necessarily available, acquire_frames will use dummy data
 daq.acquire_frames(camera_index=0) 
 daq.acquire_reference_trace(instruments['scope2'])
-# Get plasma auxillary parameters like pressure, currents and voltages
+# Get plasma auxillary parameters like pressure, currents and voltages!
 plasma_state_dict = plasma_setup.get_readings()
 plasma_state_dict["Timestamp"] = dt.datetime.now().time().strftime('%H:%M:%S.%f')
 daq.print_info()
 
-
-
-
-
-
 #%%
-# CALIBRATION AND PREPROCESSING 
+# -------------- CALIBRATION AND PREPROCESSING  -----------------
+
 
 daq_dict = daq.get_data_dict() # Store daq results in a dictionary
 # Create calibrator object and initialze it with DAQ data dictionary
@@ -180,7 +176,7 @@ fig_map, ax_map = smap.plot() # plot stark map
 
 
 # %%
-# -------------- Save DATA -----------------
+# -------------- SAVE DATA -----------------
 # Create the 'data' directory if it doesn't exist
 working_dir = 'G:\\My Drive\\Vaults\\WnM-AMO\\__Data\\2025-09-30'
 date = dt.datetime.now().date() 
@@ -211,12 +207,12 @@ else:
     df = pd.DataFrame(dict)
     df.to_csv(file_params_path, index=False)
 
-#%%
 # Generate MD table entry
 smap_fname = os.path.basename(file_smap_path)
 imgs_fname = os.path.basename(file_daq_path)
 plot_fname = os.path.basename(file_plot_path)
-md_table_entry = "|"+"|".join([str(index), smap_fname, f"![[{plot_fname}\|200]]"])+"||"
+md_table_entry = "|"+"|".join([str(index), f"[[{smap_fname}\|link]]", f"![[{plot_fname}\|200]]"])+"||"
+pyp.copy(md_table_entry)
 print(md_table_entry)
 
 # %%
